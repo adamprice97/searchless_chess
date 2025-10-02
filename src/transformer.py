@@ -282,3 +282,86 @@ def build_transformer_predictor(
   """Returns a transformer predictor."""
   model = hk.transform(functools.partial(transformer_decoder, config=config))
   return constants.Predictor(initial_params=model.init, predict=model.apply)
+
+def _encode_state_core(targets: jax.Array, config: TransformerConfig) -> jax.Array:
+  """Embeds the state tokens (everything before the last 3) into a single vector."""
+  # targets shape: [B, T_total]; state length = T_total - 3
+  state_len = targets.shape[1] - 3
+  state_tokens = targets[:, :state_len]  # [B, Ts]
+  # Standard embedding + (non-causal) transformer layers to get a core.
+  # We reuse embed_sequences for positional encodings.
+  x = embed_sequences(state_tokens, config)  # [B, Ts, D]
+
+  # Use the same block stack but without causal masking.
+  non_causal_cfg = dataclasses.replace(config, use_causal_mask=False)
+  h = x
+  for _ in range(non_causal_cfg.num_layers):
+    attention_input = layer_norm(h)
+    attention = _attention_block(attention_input, non_causal_cfg)
+    h += attention
+    mlp_input = layer_norm(h)
+    mlp_output = _mlp_block(mlp_input, non_causal_cfg)
+    h += mlp_output
+  if non_causal_cfg.apply_post_ln:
+    h = layer_norm(h)
+
+  # Pool to a single core vector; mean-pool works well here.
+  core = jnp.mean(h, axis=1)  # [B, D]
+  return core
+
+def param_action_heads(
+    targets: jax.Array,  # [B, T] = (state tokens) + [from, to, promo]
+    config: TransformerConfig,
+) -> jax.Array:
+  """Returns log-probs shaped [B, T, V] with V=64; last 3 steps are valid.
+
+  - Step T-3: logits over from-squares (64).
+  - Step T-2: logits over to-squares (64), conditioned on sampled/teacher-forced 'from'.
+  - Step T-1: logits over promotions (first 5 indices), conditioned on from & to.
+  """
+  B, T = targets.shape
+  V = 64  # unified vocabulary for the heads
+
+  # Compute core from the state.
+  core = _encode_state_core(targets, config)  # [B, D]
+
+  # Teacher-forcing: use the ground-truth 'from' and 'to' tokens for conditioning.
+  from_gt = targets[:, -3]            # [B], ints in [0,63]
+  to_gt = targets[:, -2]              # [B], ints in [0,63]
+  from_oh = jax.nn.one_hot(from_gt, 64)  # [B, 64]
+  to_oh   = jax.nn.one_hot(to_gt, 64)    # [B, 64]
+
+  # Head 1: p(from)
+  h1 = jnp.concatenate([core], axis=-1)
+  logits_from = hk.Linear(V)(h1)  # [B, 64]
+
+  # Head 2: p(to | from)
+  h2 = jnp.concatenate([core, from_oh], axis=-1)
+  h2 = hk.Linear(core.shape[-1])(h2); h2 = jnn.silu(h2)
+  logits_to = hk.Linear(V)(h2)  # [B, 64]
+
+  # Head 3: p(promo | from, to) -> first 5 classes used
+  h3 = jnp.concatenate([core, from_oh, to_oh], axis=-1)
+  h3 = hk.Linear(core.shape[-1])(h3); h3 = jnn.silu(h3)
+  logits_promo5 = hk.Linear(5)(h3)       # [B, 5]
+  # Pad to 64 so we can return [B, 64]; unused classes won't be targeted.
+  pad = jnp.full((B, V - 5), -1e9, dtype=logits_promo5.dtype)
+  logits_promo = jnp.concatenate([logits_promo5, pad], axis=-1)  # [B, 64]
+
+  # Now place the three heads into the final [B, T, V] tensor.
+  logits = jnp.zeros((B, T, V), dtype=logits_from.dtype)
+  logits = logits.at[:, -3, :].set(logits_from)
+  logits = logits.at[:, -2, :].set(logits_to)
+  logits = logits.at[:, -1, :].set(logits_promo)
+
+  return jnn.log_softmax(logits, axis=-1)
+
+
+def build_param_action_predictor(
+    config: TransformerConfig,
+) -> constants.Predictor:
+  """Predictor for the parameterised BC head, compatible with the trainer."""
+  def forward(targets: jax.Array) -> jax.Array:
+    return param_action_heads(targets=targets, config=config)
+  model = hk.transform(forward)
+  return constants.Predictor(initial_params=model.init, predict=model.apply)

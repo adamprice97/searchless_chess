@@ -188,6 +188,58 @@ class BCEngine(NeuralEngine):
       best_index = np.argmax(action_log_probs)
       return sorted_legal_moves[best_index]
 
+class ParamBCEngine(NeuralEngine):
+  """Policy engine for the parameterised BC head (from, to, promo)."""
+
+  @staticmethod
+  def _uci_to_params(uci: str) -> tuple[int, int, int]:
+    uci = uci.strip().lower()
+    files = "abcdefgh"
+    # map promotion letter to id: none=0,q=1,r=2,b=3,n=4
+    promo_map = {"q": 1, "r": 2, "b": 3, "n": 4}
+    f_file, f_rank, t_file, t_rank = uci[0], uci[1], uci[2], uci[3]
+    def sq_idx(f, r): return (int(r) - 1) * 8 + files.index(f)
+    from_idx = sq_idx(f_file, f_rank)
+    to_idx = sq_idx(t_file, t_rank)
+    promo = promo_map.get(uci[4], 0) if len(uci) == 5 else 0
+    return from_idx, to_idx, promo
+
+  def analyse(self, board: chess.Board) -> engine.AnalysisResult:
+    """Returns log-probs over legal moves under the parameterised head."""
+    # Tokenize board once
+    tokenized_fen = tokenizer.tokenize(board.fen()).astype(np.int32)
+    state_len = tokenized_fen.shape[0]
+
+    # Build one sequence per legal move, teacher-forcing (from,to,promo)
+    sorted_legal_moves = engine.get_ordered_legal_moves(board)
+    legals_uci = [m.uci() for m in sorted_legal_moves]
+    params = np.array([self._uci_to_params(u) for u in legals_uci], dtype=np.int32)  # [N,3]
+
+    N = len(legals_uci)
+    states = np.repeat(tokenized_fen[None, :], N, axis=0)                             # [N, Ts]
+    sequences = np.concatenate([states, params], axis=1).astype(np.int32)            # [N, Ts+3]
+
+    # Predictor returns log-probs [N, T, V]. We need the last 3 positions.
+    out = self.predict_fn(sequences)                                                 # [N, T, V]
+    # Gather the three log-probs we care about:
+    from_lp  = np.take_along_axis(out[:, -3, :], params[:, 0:1], axis=-1)[:, 0]      # [N]
+    to_lp    = np.take_along_axis(out[:, -2, :], params[:, 1:2], axis=-1)[:, 0]      # [N]
+    promo_lp = np.take_along_axis(out[:, -1, :], params[:, 2:3], axis=-1)[:, 0]      # [N]
+    action_log_probs = from_lp + to_lp + promo_lp                                    # [N]
+
+    # Renormalize across the legal set (optional but nice for temperature sampling).
+    action_log_probs = jnn.log_softmax(action_log_probs)
+
+    return {'log_probs': action_log_probs, 'fen': board.fen()}
+
+  def play(self, board: chess.Board) -> chess.Move:
+    action_log_probs = self.analyse(board)['log_probs']   # [N]
+    sorted_legal_moves = engine.get_ordered_legal_moves(board)
+    if self.temperature is not None:
+      probs = scipy.special.softmax(action_log_probs / self.temperature, axis=-1)
+      return self._rng.choice(sorted_legal_moves, p=probs)
+    else:
+      return sorted_legal_moves[int(np.argmax(action_log_probs))]
 
 def wrap_predict_fn(
     predictor: constants.Predictor,
@@ -231,4 +283,5 @@ ENGINE_FROM_POLICY = {
     'action_value': ActionValueEngine,
     'state_value': StateValueEngine,
     'behavioral_cloning': BCEngine,
+    'behavioral_cloning_param': ParamBCEngine, 
 }

@@ -27,6 +27,7 @@ import chess
 import haiku as hk
 import numpy as np
 import scipy.stats
+from pathlib import Path
 
 from searchless_chess.src import bagz
 from searchless_chess.src import config as config_lib
@@ -339,6 +340,85 @@ class BCChessStaticMetricsEvaluator(ActionValueChessStaticMetricsEvaluator):
         kendall_tau=kendall_tau,
         entropy=entropy,
     )
+  
+class BCParamChessStaticMetricsEvaluator(ChessStaticMetricsEvaluator):
+  """Evaluator for the parameterised behavioral cloning head."""
+
+  def _retrieve_test_data(self) -> dict[str, Sequence[np.ndarray]]:
+    # Reuse the action-value bag to get (fen -> legal actions & scores).
+    move_to_action = utils.MOVE_TO_ACTION
+    bag_reader = bagz.BagReader(self._dataset_path)
+
+    action_score_dict = collections.defaultdict(dict)
+    for bytes_data in bag_reader:
+      fen, move, win_prob = constants.CODERS['action_value'].decode(bytes_data)
+      action = move_to_action[move]
+      action_score_dict[fen][action] = win_prob
+
+    # Keep only FENs whose legal move list matches.
+    to_remove = []
+    for fen in action_score_dict:
+      list_items = list(action_score_dict[fen].items())
+      list_items.sort(key=lambda x: x[0])
+      action_score_dict[fen] = np.array(list_items, dtype=np.float32)
+
+      board = chess.Board(fen)
+      legal_actions = action_score_dict[fen][:, 0].tolist()
+      true_legal_moves = engine.get_ordered_legal_moves(board)
+      true_legal_actions = [move_to_action[x.uci()] for x in true_legal_moves]
+      if true_legal_actions != legal_actions:
+        to_remove.append(fen)
+
+    for fen in to_remove:
+      del action_score_dict[fen]
+    if action_score_dict:
+      frac_removed = len(to_remove) / (len(action_score_dict) + len(to_remove))
+      logging.info('Removed %f of FENs, wrong legal actions.', frac_removed)
+
+    return dict(action_score_dict)
+
+  def _compute_metrics(self, fen: str) -> ChessStaticMetrics:
+    if not hasattr(self, '_predict_fn'):
+      raise ValueError('Predictor is not initialized.')
+
+    # Best action index per Stockfish returns
+    legal_actions_returns = self._test_data[fen][:, 1]
+    best_action_index = int(np.argmax(legal_actions_returns))
+
+    # Use the new engine
+    neural_engine = neural_engines.ParamBCEngine(predict_fn=self._predict_fn)
+    analysis_results = neural_engine.analyse(chess.Board(fen))
+    action_log_probs = analysis_results['log_probs']
+    action_probs = np.exp(action_log_probs)
+
+    # Entropy (bits)
+    entropy = -np.sum(action_probs * action_log_probs) / np.log(2)
+
+    # Log-loss on the best action (bits)
+    action_loss = -action_log_probs[best_action_index] / np.log(2)
+
+    # Accuracy and Kendall-τ
+    best_legal_actions = (legal_actions_returns == np.max(legal_actions_returns))
+    action_accuracy = bool(best_legal_actions[int(np.argmax(action_probs))])
+
+    if len(action_probs) == 1:
+      kendall_tau = 1.0
+    else:
+      kendall_tau, _ = scipy.stats.kendalltau(
+          x=np.argsort(action_probs),
+          y=np.argsort(legal_actions_returns),
+      )
+
+    return ChessStaticMetrics(
+        fen=fen,
+        action_accuracy=action_accuracy,
+        output_log_loss=action_loss,
+        l2_win_prob_loss=None,
+        consistency_loss=None,
+        kendall_tau=float(kendall_tau),
+        entropy=float(entropy),
+    )
+
 
 
 # Follows the base_constants.EvaluatorBuilder protocol.
@@ -351,15 +431,24 @@ def build_evaluator(
       'action_value': ActionValueChessStaticMetricsEvaluator,
       'state_value': StateValueChessStaticMetricsEvaluator,
       'behavioral_cloning': BCChessStaticMetricsEvaluator,
+      'behavioral_cloning_param': BCParamChessStaticMetricsEvaluator,
   }
+
+  # Build data path relative to this file (works no matter where you run from)
+  src_dir = Path(__file__).resolve().parent        # .../searchless_chess/src
+  data_path = src_dir.parent / "data" / config.data.split / "action_value_data.bag"
+
+  # Helpful error if missing
+  if not data_path.exists():
+    raise FileNotFoundError(
+        f"Eval data not found at: {data_path}\n"
+        "Expected action_value_data.bag under data/<split>/.\n"
+        "Check your split (train/test) and path."
+    )
+
   return evaluator_by_policy[config.policy](
       predictor=predictor,
-      # We always use the action-value data for evaluation since it provides the
-      # required information for all the metrics.
-      dataset_path=os.path.join(
-          os.getcwd(),
-          f'../data/{config.data.split}/action_value_data.bag',
-      ),
+      dataset_path=str(data_path),  # <-- convert Path -> str
       num_return_buckets=config.num_return_buckets,
       num_eval_data=config.num_eval_data,
       batch_size=config.batch_size,

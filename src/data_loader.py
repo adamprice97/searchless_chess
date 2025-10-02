@@ -21,6 +21,7 @@ import os
 import grain.python as pygrain
 import jax
 import numpy as np
+from pathlib import Path
 
 from searchless_chess.src import bagz
 from searchless_chess.src import config as config_lib
@@ -120,23 +121,44 @@ class ConvertActionValueDataToSequence(ConvertToSequence):
     sequence = np.concatenate([state, action, return_bucket])
     return sequence, self._loss_mask
 
+class ConvertBehavioralCloningParamToSequence(ConvertToSequence):
+  """Converts fen+move into sequence: (state) + (from, to, promote)."""
+
+  def __init__(self, num_return_buckets: int) -> None:
+    super().__init__(num_return_buckets)
+    # Override the default mask: train on the last 3 tokens (from, to, promo).
+    self._loss_mask = np.full((self._sequence_length,), True, dtype=bool)
+    self._loss_mask[-3:] = False  # only last 3 contribute to loss
+
+  @property
+  def _sequence_length(self) -> int:
+    # state length + 3 parameter tokens
+    return tokenizer.SEQUENCE_LENGTH + 3
+
+  def map(self, element: bytes) -> tuple[constants.Sequences, constants.LossMask]:
+    fen, move = constants.CODERS['behavioral_cloning'].decode(element)
+    state = _process_fen(fen)
+    from_sq, to_sq, promo = utils.move_to_params(move)
+    params = np.asarray([from_sq, to_sq, promo], dtype=np.int32)
+    sequence = np.concatenate([state, params])
+    return sequence, self._loss_mask
+
 
 _TRANSFORMATION_BY_POLICY = {
     'behavioral_cloning': ConvertBehavioralCloningDataToSequence,
+    'behavioral_cloning_param': ConvertBehavioralCloningParamToSequence,  
     'action_value': ConvertActionValueDataToSequence,
     'state_value': ConvertStateValueDataToSequence,
 }
 
-
 # Follows the base_constants.DataLoaderBuilder protocol.
 def build_data_loader(config: config_lib.DataConfig) -> pygrain.DataLoader:
   """Returns a data loader for chess from the config."""
-  data_source = bagz.BagDataSource(
-      os.path.join(
-          os.getcwd(),
-          f'../data/{config.split}/{config.policy}_data.bag',
-      ),
-  )
+
+  src_dir = Path(__file__).resolve().parent          # ...\searchless_chess\src
+  data_path = src_dir.parent / "data" / config.split / f"{config.policy}_data.bag"
+
+  data_source = bagz.BagDataSource(str(data_path))
 
   if config.num_records is not None:
     num_records = config.num_records
@@ -168,3 +190,4 @@ def build_data_loader(config: config_lib.DataConfig) -> pygrain.DataLoader:
       worker_count=config.worker_count,
       read_options=None,
   )
+

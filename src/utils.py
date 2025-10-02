@@ -160,3 +160,24 @@ def compute_return_buckets_from_returns(
         f' rank{len(bins_edges.shape)}.'
     )
   return np.searchsorted(bins_edges, returns, side='left')
+
+def square_to_index(file_char: str, rank_char: str) -> int:
+  """Converts e.g. 'a','1' -> 0, ..., 'h','8' -> 63."""
+  file_idx = _CHESS_FILE.index(file_char)
+  rank_idx = int(rank_char) - 1  # '1'..'8' -> 0..7
+  return rank_idx * 8 + file_idx
+
+_PROMO_MAP = {'q': 1, 'r': 2, 'b': 3, 'n': 4}
+
+def move_to_params(uci: str) -> tuple[int, int, int]:
+  """Converts a UCI move (e.g., 'e2e4', 'a7a8q') to (from_sq, to_sq, promo_id)."""
+  uci = uci.strip().lower()
+  if len(uci) < 4:
+    raise ValueError(f"Bad UCI move: {uci}")
+  f_file, f_rank, t_file, t_rank = uci[0], uci[1], uci[2], uci[3]
+  from_sq = square_to_index(f_file, f_rank)
+  to_sq = square_to_index(t_file, t_rank)
+  promo = 0
+  if len(uci) == 5:
+    promo = _PROMO_MAP.get(uci[4], 0)
+  return from_sq, to_sq, promo

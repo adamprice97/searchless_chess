@@ -44,62 +44,77 @@ def main(argv: Sequence[str]) -> None:
   policy: config_lib.PolicyType = _POLICY.value  # pytype: disable=annotation-type-mismatch
   num_return_buckets = 128
 
+  max_sequence_length = tokenizer.SEQUENCE_LENGTH + 2
+
   match policy:
-    case 'action_value':
+    case 'action_value' | 'state_value':
       output_size = num_return_buckets
     case 'behavioral_cloning':
       output_size = utils.NUM_ACTIONS
-    case 'state_value':
-      output_size = num_return_buckets
+    case 'behavioral_cloning_param':
+      output_size = 64  # unified head vocab for (from/to/promo)
+      max_sequence_length += 1
+
+  # === BEHAVIORAL CLONING (BC) — MAIN SETUP ===
+  # Model: 16 layers, 8 heads, d_model=1024, learned pos encodings, no causal mask.
+  # Data: 10M-game train set. Optimizer: Adam, lr=1e-4, batch=4096, 10M steps.
 
   predictor_config = transformer.TransformerConfig(
-      vocab_size=utils.NUM_ACTIONS,
-      output_size=output_size,
+      vocab_size=utils.NUM_ACTIONS,           # keep as-is per your API
+      output_size=output_size,          
       pos_encodings=transformer.PositionalEncodings.LEARNED,
-      max_sequence_length=tokenizer.SEQUENCE_LENGTH + 2,
-      num_heads=4,
-      num_layers=4,
-      embedding_dim=64,
-      apply_post_ln=True,
+      max_sequence_length=max_sequence_length,     # BC context length
+      num_heads=8,
+      num_layers=8,
+      embedding_dim=256,                     # d_model
+      apply_post_ln=True,                     # post-norm + SwiGLU in paper
       apply_qk_layernorm=False,
-      use_causal_mask=False,
+      use_causal_mask=False,                  # no causal mask
   )
+
   train_config = config_lib.TrainConfig(
-      learning_rate=1e-4,
+      learning_rate=4e-4,
       data=config_lib.DataConfig(
-          batch_size=256,
+          batch_size=1024,                    # paper main setup
           shuffle=True,
-          worker_count=0,  # 0 disables multiprocessing.
-          num_return_buckets=num_return_buckets,
+          worker_count=0,
+          num_return_buckets=0,               # BC has no value bins
           policy=policy,
           split='train',
       ),
-      log_frequency=1,
-      num_steps=20,
-      ckpt_frequency=5,
-      save_frequency=10,
+      log_frequency=100,                      # practical default; adjust if noisy
+      num_steps=5_000_000,                   # ~2.67 epochs on 10M games
+      ckpt_frequency=25_000,                  # sensible cadence
+      save_frequency=25_000,
   )
+
   eval_config = config_lib.EvalConfig(
       data=config_lib.DataConfig(
-          batch_size=1,
+          batch_size=1024,                    # eval throughput
           shuffle=False,
-          worker_count=0,  # 0 disables multiprocessing.
-          num_return_buckets=num_return_buckets,
-          policy=None,  # pytype: disable=wrong-arg-types
+          worker_count=0,
+          num_return_buckets=0,               # BC
+          policy=None,                        # pytype: disable=wrong-arg-types
           split='test',
       ),
       use_ema_params=True,
       policy=policy,
-      batch_size=32,
-      num_return_buckets=num_return_buckets,
-      num_eval_data=64,
+      batch_size=512,                        # eval micro-batch if your loop uses it
+      num_return_buckets=0,
+      num_eval_data=10_000,                   # ≈ size of their test set (states)
   )
+
 
   params = training.train(
       train_config=train_config,
       predictor_config=predictor_config,
       build_data_loader=data_loader.build_data_loader,
   )
+
+  if policy == 'behavioral_cloning_param':
+    predictor = transformer.build_param_action_predictor(predictor_config)
+  else:
+    predictor = transformer.build_transformer_predictor(predictor_config)
 
   predictor = transformer.build_transformer_predictor(predictor_config)
   evaluator = metrics_evaluator.build_evaluator(predictor, eval_config)
