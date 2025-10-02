@@ -167,20 +167,18 @@ def sinusoid_position_encoding(
   )
   return embeddings[:, :hidden_size]
 
+# transformer.py
 
-def embed_sequences(
-    sequences: jax.Array,
-    config: TransformerConfig,
-) -> jax.Array:
-  """Returns embeddings for sequences of tokens."""
+def embed_sequences(sequences: jax.Array, config: TransformerConfig) -> jax.Array:
   embs_init = hk.initializers.TruncatedNormal(stddev=config.emb_init_scale)
-  embeddings_layer = hk.Embed(
+  token_embeddings = hk.Embed(
       vocab_size=config.vocab_size,
       embed_dim=config.embedding_dim,
       lookup_style=hk.EmbedLookupStyle.ARRAY_INDEX,
       w_init=embs_init,
+      name="token_embed",            # ← give it a unique name
   )
-  embeddings = embeddings_layer(sequences)
+  embeddings = token_embeddings(sequences)
   embeddings *= jnp.sqrt(config.embedding_dim)
 
   _, sequence_length, embedding_size = embeddings.shape
@@ -196,9 +194,9 @@ def embed_sequences(
       pos_encodings = hk.Embed(
           vocab_size=config.max_sequence_length,
           embed_dim=embedding_size,
+          name="pos_embed",           # ← and a different name here
       )(positions)
   return embeddings + pos_encodings
-
 
 def layer_norm(x: jax.Array) -> jax.Array:
   """Helper function for layer norm."""
