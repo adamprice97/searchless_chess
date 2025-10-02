@@ -64,8 +64,8 @@ def main(argv: Sequence[str]) -> None:
       output_size=output_size,          
       pos_encodings=transformer.PositionalEncodings.LEARNED,
       max_sequence_length=max_sequence_length,     # BC context length
-      num_heads=8,
-      num_layers=8,
+      num_heads=4,
+      num_layers=4,
       embedding_dim=256,                     # d_model
       apply_post_ln=True,                     # post-norm + SwiGLU in paper
       apply_qk_layernorm=False,
