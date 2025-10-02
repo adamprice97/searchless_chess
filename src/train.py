@@ -75,7 +75,7 @@ def main(argv: Sequence[str]) -> None:
   train_config = config_lib.TrainConfig(
       learning_rate=4e-4,
       data=config_lib.DataConfig(
-          batch_size=1024,                    # paper main setup
+          batch_size=512,                    # paper main setup
           shuffle=True,
           worker_count=0,
           num_return_buckets=0,               # BC has no value bins
@@ -90,7 +90,7 @@ def main(argv: Sequence[str]) -> None:
 
   eval_config = config_lib.EvalConfig(
       data=config_lib.DataConfig(
-          batch_size=1024,                    # eval throughput
+          batch_size=512,                    # eval throughput
           shuffle=False,
           worker_count=0,
           num_return_buckets=0,               # BC
