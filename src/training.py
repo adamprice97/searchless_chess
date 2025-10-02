@@ -31,7 +31,8 @@ from searchless_chess.src import config as config_lib
 from searchless_chess.src import constants
 from searchless_chess.src import training_utils
 from searchless_chess.src import transformer
-
+from searchless_chess.src import puzzles_evaluator
+from searchless_chess.src import metrics_evaluator
 
 def train(
     train_config: config_lib.TrainConfig,
@@ -48,6 +49,19 @@ def train(
 
   # Build the predictor and the data loader.
   predictor = transformer.build_transformer_predictor(predictor_config)
+
+  puzzles_eval_cfg = puzzles_evaluator.PuzzlesEvalConfig(
+      puzzles_path=getattr(train_config, "puzzles_path", None),
+      num_puzzles=getattr(train_config, "puzzles_num", 2048),
+      batch_size=getattr(train_config, "puzzles_batch_size", 64),
+      policy=train_config.data.policy,  # 'behavioral_cloning_param' etc.
+    )
+
+  evaluator = metrics_evaluator.build_evaluator(
+        predictor=predictor,
+        config=train_config.eval,   # config_lib.EvalConfig
+    )
+
   # For multi-host topologies, we want every process to train on different data,
   # so we need to modify the seed accordingly.
   train_config.data.seed += jax.process_index()
@@ -154,6 +168,26 @@ def train(
             jax.device_get(loss),
             jax.device_get(grad_norm_unclipped),
         )
+
+    if puzzles_eval_cfg is not None and (step % train_config.puzzles_eval_every == 0):
+        # Unreplicate EMA params for eval
+        host_params_ema = training_utils.unreplicate(params_ema)
+
+        # Rebuild the puzzles evaluator with current EMA params
+        pe = puzzles_evaluator.PuzzlesEvaluator(
+            predictor=predictor,
+            params=host_params_ema,
+            config=puzzles_eval_cfg,  # the config object
+        )
+        pz_metrics = pe.step()
+        logging.info("PUZZLES EVAL step=%d %s", step,
+                    {k: float(v) for k, v in pz_metrics.items()})
+
+        #just chucking this here for now
+        host_params_ema = training_utils.unreplicate(params_ema)
+        metrics = evaluator.step(params=host_params_ema, step=step)
+        # Log a compact line; evaluator returns a dict of numpy scalars.
+        logging.info("EVAL step=%d %s", step, {k: float(v) for k, v in metrics.items()})
 
   if train_config.ckpt_frequency is not None:
     checkpoint_manager.close()

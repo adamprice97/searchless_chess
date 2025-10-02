@@ -19,6 +19,7 @@ from collections.abc import Sequence
 
 from absl import app
 from absl import flags
+import os
 
 from searchless_chess.src import config as config_lib
 from searchless_chess.src import data_loader
@@ -60,7 +61,8 @@ def main(argv: Sequence[str]) -> None:
   # Data: 10M-game train set. Optimizer: Adam, lr=1e-4, batch=4096, 10M steps.
 
   predictor_config = transformer.TransformerConfig(
-      vocab_size=utils.NUM_ACTIONS,           # keep as-is per your API
+      #vocab_size=tokenizer.VOCAB_SIZE,           # keep as-is per your API
+      vocab_size=utils.NUM_ACTIONS,
       output_size=output_size,          
       pos_encodings=transformer.PositionalEncodings.LEARNED,
       max_sequence_length=max_sequence_length,     # BC context length
@@ -72,12 +74,17 @@ def main(argv: Sequence[str]) -> None:
       use_causal_mask=False,                  # no causal mask
   )
 
+  puzzles_path = os.path.join(
+      os.getcwd(),
+      'data/puzzles.csv',
+  )
+
   train_config = config_lib.TrainConfig(
       learning_rate=4e-4,
       data=config_lib.DataConfig(
           batch_size=512,                    # paper main setup
           shuffle=True,
-          worker_count=8,
+          worker_count=0,
           num_return_buckets=0,               # BC has no value bins
           policy=policy,
           split='train',
@@ -86,13 +93,24 @@ def main(argv: Sequence[str]) -> None:
       num_steps=500_000,                   # ~2.67 epochs on 10M games
       ckpt_frequency=5_000,                  # sensible cadence
       save_frequency=5_000,
+      puzzles_eval_every=1,
+      puzzles_num=8,
+      puzzles_batch_size=4,
+      puzzles_path=puzzles_path,
+      eval=config_lib.EvalConfig(
+        policy=policy,
+        data=config_lib.DataConfig(policy=None, num_return_buckets=0, split="test", batch_size=512, num_records=1024),
+        num_return_buckets=0,
+        num_eval_data=512,
+        batch_size=64,
+      ),
   )
 
   eval_config = config_lib.EvalConfig(
       data=config_lib.DataConfig(
           batch_size=512,                    # eval throughput
           shuffle=False,
-          worker_count=2,
+          worker_count=0,
           num_return_buckets=0,               # BC
           policy=None,                        # pytype: disable=wrong-arg-types
           split='test',

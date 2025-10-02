@@ -29,6 +29,15 @@ import orbax.checkpoint as ocp
 
 from searchless_chess.src import constants
 
+def unreplicate(tree):
+  """Convert a replicated pytree (leading replica axis) back to a single-host tree."""
+  def _take_first_replica(x):
+    x_host = jax.device_get(x)
+    if getattr(x_host, "ndim", 0) == 0:
+      return x_host
+    return x_host[0]
+  # New API for JAX >=0.6.0
+  return jax.tree.map(_take_first_replica, tree)
 
 def replicate(
     array_tree: chex.ArrayTree,

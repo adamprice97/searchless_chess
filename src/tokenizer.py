@@ -114,3 +114,13 @@ def tokenize(fen: str) -> jtp.Int32[jtp.Array, 'T']:
   assert len(indices) == SEQUENCE_LENGTH
 
   return np.asarray(indices, dtype=np.uint8)
+
+# ---- Public exports for model configs ----
+VOCAB = tuple(_CHARACTERS)                          # immutable view of the alphabet
+VOCAB_SIZE = len(_CHARACTERS)                       # 31
+CHAR_TO_ID = _CHARACTERS_INDEX
+ID_TO_CHAR = {i: ch for ch, i in _CHARACTERS_INDEX.items()}
+
+# Useful ids (optional helpers)
+EMPTY_ID = _CHARACTERS_INDEX['.']                   # used for blank squares / padding
+SIDE_TO_MOVE_ID = _CHARACTERS_INDEX['w']            # side-to-move token id for 'w'

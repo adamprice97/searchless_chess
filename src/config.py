@@ -47,6 +47,22 @@ class DataConfig:
   # the dataset does not fit into memory).
   num_records: int | None = None
 
+@dataclasses.dataclass(kw_only=True)
+class EvalConfig:
+  """Config for the evaluator."""
+
+  # The data configuration for evaluation.
+  data: DataConfig
+  # How many data points to consider for evaluation.
+  num_eval_data: int | None = None
+  # Enables use of ema-ed params in eval.
+  use_ema_params: bool = False
+  # The policy used to play moves with the model.
+  policy: PolicyType
+  # The number of return buckets.
+  num_return_buckets: int
+  # The batch size for evaluation.
+  batch_size: int | None = None
 
 @dataclasses.dataclass(kw_only=True)
 class TrainConfig:
@@ -70,21 +86,9 @@ class TrainConfig:
   save_frequency: int | None = None
   # The frequency of logging in gradient steps (`None` means no logging).
   log_frequency: int | None = None
+  puzzles_eval_every: int | None = None   # e.g., 5000 to run every 5k steps
+  puzzles_num: int = 256                  # how many puzzles per eval
+  puzzles_batch_size: int = 64            # predict_fn batch
+  puzzles_path: str | None = None   
+  eval: EvalConfig | None = None
 
-
-@dataclasses.dataclass(kw_only=True)
-class EvalConfig:
-  """Config for the evaluator."""
-
-  # The data configuration for evaluation.
-  data: DataConfig
-  # How many data points to consider for evaluation.
-  num_eval_data: int | None = None
-  # Enables use of ema-ed params in eval.
-  use_ema_params: bool = False
-  # The policy used to play moves with the model.
-  policy: PolicyType
-  # The number of return buckets.
-  num_return_buckets: int
-  # The batch size for evaluation.
-  batch_size: int | None = None
