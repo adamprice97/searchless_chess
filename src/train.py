@@ -83,9 +83,9 @@ def main(argv: Sequence[str]) -> None:
           split='train',
       ),
       log_frequency=100,                      # practical default; adjust if noisy
-      num_steps=5_000_000,                   # ~2.67 epochs on 10M games
-      ckpt_frequency=25_000,                  # sensible cadence
-      save_frequency=25_000,
+      num_steps=500_000,                   # ~2.67 epochs on 10M games
+      ckpt_frequency=5_000,                  # sensible cadence
+      save_frequency=5_000,
   )
 
   eval_config = config_lib.EvalConfig(
@@ -103,7 +103,6 @@ def main(argv: Sequence[str]) -> None:
       num_return_buckets=0,
       num_eval_data=10_000,                   # ≈ size of their test set (states)
   )
-
 
   params = training.train(
       train_config=train_config,
