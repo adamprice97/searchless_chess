@@ -77,7 +77,7 @@ def main(argv: Sequence[str]) -> None:
       data=config_lib.DataConfig(
           batch_size=512,                    # paper main setup
           shuffle=True,
-          worker_count=0,
+          worker_count=8,
           num_return_buckets=0,               # BC has no value bins
           policy=policy,
           split='train',
@@ -92,7 +92,7 @@ def main(argv: Sequence[str]) -> None:
       data=config_lib.DataConfig(
           batch_size=512,                    # eval throughput
           shuffle=False,
-          worker_count=0,
+          worker_count=2,
           num_return_buckets=0,               # BC
           policy=None,                        # pytype: disable=wrong-arg-types
           split='test',
