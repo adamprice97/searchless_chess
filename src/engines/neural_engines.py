@@ -195,65 +195,53 @@ import numpy as np
 from searchless_chess.src import tokenizer
 from searchless_chess.src.engines.engine import Engine  # or inherit your NeuralEngine base
 
-class ParamBCEngine(Engine):
-    """
-    Autoregressive param head engine:
-      - Calls predictor with mode="ar" to sample from*, then to*|from*, then promo*|from*,to*.
-      - Returns the sampled move directly (may be illegal if the model picks an illegal combo).
-    """
+class ParamBCEngine(NeuralEngine):
+  """Autoregressive (from -> to -> promo) inference for the parameterised BC head."""
 
-    def __init__(self, *, predictor, params, temperature: float | None = None, greedy: bool = True):
-        """
-        Args:
-          predictor: the unified predictor returned by build_param_action_predictor(...)
-          params:    hk.Params (ideally EMA) from training
-          temperature: optional temperature for sampling when greedy=False
-          greedy:    if True, argmax at each step; else sample with temperature
-        """
-        self._predictor = predictor
-        self.params = params
-        self.temperature = temperature
-        self.greedy = greedy
-        self._np_rng = np.random.default_rng()
+  def __init__(self,
+               *,
+               params: hk.Params,
+               decode_apply,                # function: apply(params, rng, state_tokens, greedy=..., temperature=...)
+               rng_key=None,
+               temperature: float | None = None,
+               greedy: bool = True):
+    super().__init__(temperature=temperature)
+    self._params = params
+    self._decode_apply = decode_apply
+    self._rng = jax.random.PRNGKey(0) if rng_key is None else rng_key
+    self._greedy = greedy
 
-    @staticmethod
-    def _params_to_uci(from_idx: int, to_idx: int, promo_idx: int) -> str:
-        files = "abcdefgh"
-        def idx_to_sq(i: int) -> str:
-            return f"{files[i % 8]}{1 + i // 8}"
-        promo_map = {0: "", 1: "q", 2: "r", 3: "b", 4: "n"}  # must match training
-        return idx_to_sq(from_idx) + idx_to_sq(to_idx) + promo_map.get(promo_idx, "")
+  @staticmethod
+  def _idxs_to_uci(from_idx: int, to_idx: int, promo_idx: int) -> str:
+    files = "abcdefgh"
+    def sq(i): return f"{files[i % 8]}{(i // 8) + 1}"
+    promo_map = {0: "", 1: "q", 2: "r", 3: "b", 4: "n"}
+    return f"{sq(from_idx)}{sq(to_idx)}{promo_map.get(int(promo_idx), '')}"
 
-    def play(self, board: chess.Board) -> chess.Move:
-        """Return one move sampled autoregressively by the model (may be illegal)."""
-        # Tokenize state (no action tokens)
-        state_tokens = tokenizer.tokenize(board.fen()).astype(np.int32)[None, :]  # [1, Ts]
+  def play(self, board: chess.Board) -> chess.Move:
+    # Tokenize current state (no action tokens)
+    state_tokens = tokenizer.tokenize(board.fen()).astype(np.int32)[None, :]  # [1, Ts]
 
-        # JAX PRNG key (deterministic enough for a run)
-        seed = int(self._np_rng.integers(0, 2**31 - 1))
-        
-        # One-call AR decode using the SAME params tree as training.
-        # NOTE: predictor.predict is Haiku apply; first two args are (params, state).
-        from_idx, to_idx, promo_idx = self._predictor.predict(
-            self.params,
-            mode="ar",
-            state_tokens=state_tokens,
-            greedy=self.greedy,
-            temperature=self.temperature,
-        )
+    # Split RNG per call so sampling (if used) is not deterministic across calls.
+    self._rng, rng_call = jax.random.split(self._rng)
 
-        # Convert to Python ints and build UCI
-        f = int(np.array(from_idx[0]))
-        t = int(np.array(to_idx[0]))
-        p = int(np.array(promo_idx[0]))
-        uci = self._params_to_uci(f, t, p)
+    # Call stateless decoder: returns 3 integers per batch element.
+    f_idx, t_idx, p_idx = self._decode_apply(
+        self._params, rng_call, state_tokens,
+        greedy=self._greedy, temperature=self.temperature
+    )
 
-        return chess.Move.from_uci(uci)
+    # Ensure they are plain Python ints
+    f_idx, t_idx, p_idx = int(f_idx), int(t_idx), int(p_idx)
 
-    # Optional: a lightweight analyse that reports what AR produced.
-    def analyse(self, board: chess.Board):
-        move = self.play(board)
-        return {"uci": move.uci(), "fen": board.fen()}
+    uci = self._idxs_to_uci(f_idx, t_idx, p_idx)
+    return chess.Move.from_uci(uci)
+
+  # Optional: if anything in your code expects analyse(); we can expose a dummy.
+  def analyse(self, board: chess.Board):
+    # For AR decode, we don't return a distribution over legals—just the chosen move.
+    move = self.play(board)
+    return {"log_probs": None, "fen": board.fen(), "move": move.uci()}
 
 
 def wrap_predict_fn(

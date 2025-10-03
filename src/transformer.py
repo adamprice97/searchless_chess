@@ -471,6 +471,17 @@ def param_action_heads(
 
   return jnn.log_softmax(logits, axis=-1)
 
+def build_param_action_decoder(config: TransformerConfig):
+  """Returns a Haiku-transformed function that decodes (from, to, promo)
+     autoregressively from state tokens. Stateless; takes rng."""
+  def forward(state_tokens: jax.Array, *, rng=None, greedy: bool = True, temperature: float | None = None):
+    # param_action_decode_autoreg should *not* create Haiku state; it just computes heads.
+    return param_action_decode_autoreg(
+        state_tokens, config=config, rng=rng, greedy=greedy, temperature=temperature
+    )
+
+  # Stateless transform => apply(params, rng, *args, **kwargs)
+  return hk.transform(forward)
 
 def build_param_action_predictor(config: TransformerConfig) -> constants.Predictor:
   """Predictor with two modes:

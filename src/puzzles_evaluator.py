@@ -60,7 +60,7 @@ def _engine_from_policy(policy: str, predict_fn):
     raise ValueError(f"Puzzles eval only supports BC policies; got: {policy}")
 
 
-# puzzles_evaluator.py
+import jax
 
 class PuzzlesEvaluator:
   def __init__(
@@ -68,6 +68,7 @@ class PuzzlesEvaluator:
       predictor: constants.Predictor,
       params: hk.Params,
       config: PuzzlesEvalConfig,
+      predictor_config: transformer.TransformerConfig | None = None,
   ) -> None:
     self._predictor = predictor
     self._config = config
@@ -82,23 +83,22 @@ class PuzzlesEvaluator:
       raise FileNotFoundError(f"Puzzles CSV not found at {self._puzzles_path}")
 
     if self._config.policy == "behavioral_cloning_param":
-      # AR engine: uses the SAME predictor + params as training; no predict_fn/decoder needed
+      if predictor_config is None:
+        raise ValueError("Need predictor_config for BC-param autoregressive decoding.")
+      decoder = transformer.build_param_action_decoder(predictor_config)
       self._engine = neural_engines.ParamBCEngine(
-          predictor=self._predictor,
           params=params,
-          temperature=None,  # set if you want sampling
-          greedy=True,       # False to sample stochastically
+          decode_apply=decoder.apply,
+          rng_key=jax.random.PRNGKey(0),
+          temperature=None,   # or >0 for sampling
+          greedy=True,
       )
-    elif self._config.policy == "behavioral_cloning":
-      # Vanilla BC engine still uses the batched predict_fn wrapper
-      self._predict_fn = neural_engines.wrap_predict_fn(
-          predictor=self._predictor,
-          params=params,
-          batch_size=self._config.batch_size,
-      )
-      self._engine = neural_engines.BCEngine(predict_fn=self._predict_fn)
     else:
-      raise ValueError(f"Unsupported policy: {self._config.policy}")
+      self._predict_fn = neural_engines.wrap_predict_fn(
+          predictor=self._predictor, params=params, batch_size=self._config.batch_size
+      )
+      self._engine = _engine_from_policy(self._config.policy, self._predict_fn)
+
 
   def step(self) -> Mapping[str, float]:
     """Return dict of metrics for logging (accuracy, counts, avg rating)."""
