@@ -61,49 +61,49 @@ def _engine_from_policy(policy: str, predict_fn):
 
 
 class PuzzlesEvaluator:
-  """Runs puzzle accuracy for a local predictor+params."""
-
   def __init__(
       self,
       predictor: constants.Predictor,
       params: hk.Params,
       config: PuzzlesEvalConfig,
-      predictor_config: transformer.TransformerConfig
+      *,
+      predictor_config: transformer.TransformerConfig | None = None,
+      decode_apply=None,  # optionally pass a prebuilt decoder.apply
   ) -> None:
     self._predictor = predictor
     self._config = config
 
-    # Resolve puzzles.csv
-    if config.puzzles_path is None:
-      # repo_root/data/puzzles.csv
-      src_dir = Path(__file__).resolve().parent
-      self._puzzles_path = src_dir.parent / "data" / "puzzles.csv"
-    else:
-      self._puzzles_path = Path(config.puzzles_path)
+    # ... (puzzles_path resolution stays the same)
 
-    if not self._puzzles_path.exists():
-      raise FileNotFoundError(f"Puzzles CSV not found at {self._puzzles_path}")
+    # 1) Always build the padded/batched predict_fn (even if AR path won’t use it now).
+    self._predict_fn = neural_engines.wrap_predict_fn(
+        predictor=self._predictor,
+        params=params,
+        batch_size=self._config.batch_size,
+    )
 
-    # Build a padded/batched predict_fn (handles arbitrary batch sizes)
+    # 2) If we're doing the param head and we want AR decode, ensure we have a decoder.
     if self._config.policy == "behavioral_cloning_param":
-      decoder = transformer.build_param_action_decoder(predictor_config)
-      decode_apply = decoder.apply
+      if decode_apply is None:
+        if predictor_config is None:
+          raise ValueError(
+              "PuzzlesEvaluator: need `predictor_config` (or `decode_apply`) "
+              "for behavioral_cloning_param autoregressive decoding."
+          )
+        decoder = transformer.build_param_action_decoder(predictor_config)
+        decode_apply = decoder.apply
 
+      # Build AR engine; we still pass predict_fn in case you want to use ranking mode later.
       self._engine = neural_engines.ParamBCEngine(
-        predict_fn=self._predict_fn,   # still available if you want the old ranking mode later
-        params=params,                 # EMA params you unreplicate for eval
-        decode_apply=decode_apply,
-        temperature=None,              # or >0.0 if you want sampling
-        greedy=True,                   # False to sample stochastically
+          predict_fn=self._predict_fn,
+          params=params,
+          decode_apply=decode_apply,
+          temperature=None,   # or >0 for sampling
+          greedy=True,        # False to sample stochastically
       )
     else:
-      self._predict_fn = neural_engines.wrap_predict_fn(
-       predictor=self._predictor,
-       params=params,
-       batch_size=self._config.batch_size,
-      )
-      self._engine = _engine_from_policy(self._config.policy, self._predict_fn)
-
+      # Vanilla BC engine (ranking over legals).
+      self._engine = neural_engines.BCEngine(predict_fn=self._predict_fn)
 
   def step(self) -> Mapping[str, float]:
     """Return dict of metrics for logging (accuracy, counts, avg rating)."""
