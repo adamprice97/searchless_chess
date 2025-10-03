@@ -188,23 +188,6 @@ class BCEngine(NeuralEngine):
       best_index = np.argmax(action_log_probs)
       return sorted_legal_moves[best_index]
 
-class ParamBCEngine(NeuralEngine):
-  """Policy engine for the parameterised BC head (from, to, promo)."""
-
-  @staticmethod
-  def _uci_to_params(uci: str) -> tuple[int, int, int]:
-    uci = uci.strip().lower()
-    files = "abcdefgh"
-    # map promotion letter to id: none=0,q=1,r=2,b=3,n=4
-    promo_map = {"q": 1, "r": 2, "b": 3, "n": 4}
-    f_file, f_rank, t_file, t_rank = uci[0], uci[1], uci[2], uci[3]
-    def sq_idx(f, r): return (int(r) - 1) * 8 + files.index(f)
-    from_idx = sq_idx(f_file, f_rank)
-    to_idx = sq_idx(t_file, t_rank)
-    promo = promo_map.get(uci[4], 0) if len(uci) == 5 else 0
-    return from_idx, to_idx, promo
-
-# --- ParamBCEngine (AR decode; no legal enumeration) -------------------------
 import chess
 import jax
 import numpy as np

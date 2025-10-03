@@ -60,57 +60,45 @@ def _engine_from_policy(policy: str, predict_fn):
     raise ValueError(f"Puzzles eval only supports BC policies; got: {policy}")
 
 
+# puzzles_evaluator.py
+
 class PuzzlesEvaluator:
   def __init__(
       self,
       predictor: constants.Predictor,
       params: hk.Params,
       config: PuzzlesEvalConfig,
-      *,
-      predictor_config: transformer.TransformerConfig | None = None,
-      decode_apply=None,  # optionally pass a prebuilt decoder.apply
   ) -> None:
     self._predictor = predictor
     self._config = config
 
-    # Resolve puzzles.csv
+    # Resolve puzzles.csv (unchanged)
     if config.puzzles_path is None:
-      # repo_root/data/puzzles.csv
       src_dir = Path(__file__).resolve().parent
       self._puzzles_path = src_dir.parent / "data" / "puzzles.csv"
     else:
       self._puzzles_path = Path(config.puzzles_path)
-
     if not self._puzzles_path.exists():
       raise FileNotFoundError(f"Puzzles CSV not found at {self._puzzles_path}")
 
-    self._predict_fn = neural_engines.wrap_predict_fn(
-        predictor=self._predictor,
-        params=params,
-        batch_size=self._config.batch_size,
-    )
-
     if self._config.policy == "behavioral_cloning_param":
-      if decode_apply is None:
-        if predictor_config is None:
-          raise ValueError(
-              "PuzzlesEvaluator: need `predictor_config` (or `decode_apply`) "
-              "for behavioral_cloning_param autoregressive decoding."
-          )
-        decoder = transformer.build_param_action_decoder(predictor_config)
-        decode_apply = decoder.apply
-
-      # Build AR engine; we still pass predict_fn in case you want to use ranking mode later.
+      # AR engine: uses the SAME predictor + params as training; no predict_fn/decoder needed
       self._engine = neural_engines.ParamBCEngine(
-          predict_fn=self._predict_fn,
+          predictor=self._predictor,
           params=params,
-          decode_apply=decode_apply,
-          temperature=None,   # or >0 for sampling
-          greedy=True,        # False to sample stochastically
+          temperature=None,  # set if you want sampling
+          greedy=True,       # False to sample stochastically
       )
-    else:
-      # Vanilla BC engine (ranking over legals).
+    elif self._config.policy == "behavioral_cloning":
+      # Vanilla BC engine still uses the batched predict_fn wrapper
+      self._predict_fn = neural_engines.wrap_predict_fn(
+          predictor=self._predictor,
+          params=params,
+          batch_size=self._config.batch_size,
+      )
       self._engine = neural_engines.BCEngine(predict_fn=self._predict_fn)
+    else:
+      raise ValueError(f"Unsupported policy: {self._config.policy}")
 
   def step(self) -> Mapping[str, float]:
     """Return dict of metrics for logging (accuracy, counts, avg rating)."""
