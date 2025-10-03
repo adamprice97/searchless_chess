@@ -151,37 +151,23 @@ class MultiHeadDotProductAttention(hk.Module):
     output = jnp.reshape(output, (batch_size, sequence_length, num_hiddens))
     return hk.Linear(embedding_size, with_bias=False)(output)
 
-def _heads_logits_from_core(
-    core: jax.Array,
-    from_oh: jax.Array | None,
-    to_oh: jax.Array | None,
-    *,
-    config: TransformerConfig,
-) -> tuple[jax.Array, jax.Array, jax.Array]:
-  """Return logits for (from, to, promo64)."""
-  B = core.shape[0]
-  V = 64
+def _heads_logits_from_core(core, from_oh, to_oh, *, config):
+    V = 64
 
-  # Head 1
-  logits_from = hk.Linear(V, name="head_from")(core)
+    # Head 1: p(from)
+    h1 = core
+    logits_from = hk.Linear(V)(h1)  # <-- no custom name
 
-  # Head 2 (cond on from)
-  if from_oh is None:
-    from_oh = jnp.zeros((B, V), dtype=core.dtype)
-  h2 = jnp.concatenate([core, from_oh], axis=-1)
-  h2 = hk.Linear(core.shape[-1], name="head_to_pre")(h2); h2 = jnn.silu(h2)
-  logits_to = hk.Linear(V, name="head_to")(h2)
+    # Head 2: p(to | from)
+    h2 = jnp.concatenate([core, from_oh], axis=-1)
+    h2 = hk.Linear(core.shape[-1])(h2); h2 = jnn.silu(h2)  # <-- no custom name
+    logits_to = hk.Linear(V)(h2)                           # <-- no custom name
 
-  # Head 3 (cond on from, to)
-  if to_oh is None:
-    to_oh = jnp.zeros((B, V), dtype=core.dtype)
-  h3 = jnp.concatenate([core, from_oh, to_oh], axis=-1)
-  h3 = hk.Linear(core.shape[-1], name="head_promo_pre")(h3); h3 = jnn.silu(h3)
-  logits_promo5 = hk.Linear(5, name="head_promo")(h3)
-  pad = jnp.full((B, V - 5), -1e9, dtype=logits_promo5.dtype)
-  logits_promo = jnp.concatenate([logits_promo5, pad], axis=-1)
-  return logits_from, logits_to, logits_promo
-
+    # Head 3: p(promo | from, to)
+    h3 = jnp.concatenate([core, from_oh, to_oh], axis=-1)
+    h3 = hk.Linear(core.shape[-1])(h3); h3 = jnn.silu(h3)  # <-- no custom name
+    logits_promo5 = hk.Linear(5)(h3)                       # <-- no custom name
+    return logits_from, logits_to, logits_promo5
 
 def _encode_state_core_from_state(state_tokens: jax.Array, config: TransformerConfig) -> jax.Array:
   """Same as _encode_state_core but input is just the state tokens [B, Ts]."""
