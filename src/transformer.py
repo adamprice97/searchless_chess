@@ -424,51 +424,38 @@ def _encode_state_core(targets: jax.Array, config: TransformerConfig) -> jax.Arr
   core = jnp.mean(h, axis=1)  # [B, D]
   return core
 
-def param_action_heads(
-    targets: jax.Array,  # [B, T] = (state tokens) + [from, to, promo]
-    config: TransformerConfig,
-) -> jax.Array:
-  """Returns log-probs shaped [B, T, V] with V=64; last 3 steps are valid.
-
-  - Step T-3: logits over from-squares (64).
-  - Step T-2: logits over to-squares (64), conditioned on sampled/teacher-forced 'from'.
-  - Step T-1: logits over promotions (first 5 indices), conditioned on from & to.
-  """
+def param_action_heads(targets: jax.Array, config: TransformerConfig) -> jax.Array:
   B, T = targets.shape
-  V = 64  # unified vocabulary for the heads
+  V = 64
 
-  # Compute core from the state.
   core = _encode_state_core(targets, config)  # [B, D]
 
-  # Teacher-forcing: use the ground-truth 'from' and 'to' tokens for conditioning.
-  from_gt = targets[:, -3]            # [B], ints in [0,63]
-  to_gt = targets[:, -2]              # [B], ints in [0,63]
-  from_oh = jax.nn.one_hot(from_gt, 64)  # [B, 64]
-  to_oh   = jax.nn.one_hot(to_gt, 64)    # [B, 64]
+  from_gt = targets[:, -3]
+  to_gt   = targets[:, -2]
+  from_oh = jax.nn.one_hot(from_gt, 64)
+  to_oh   = jax.nn.one_hot(to_gt, 64)
 
   # Head 1: p(from)
-  h1 = jnp.concatenate([core], axis=-1)
-  logits_from = hk.Linear(V)(h1)  # [B, 64]
+  h1 = core
+  logits_from = hk.Linear(V, name="head_from")(h1)                 # <— named
 
   # Head 2: p(to | from)
   h2 = jnp.concatenate([core, from_oh], axis=-1)
-  h2 = hk.Linear(core.shape[-1])(h2); h2 = jnn.silu(h2)
-  logits_to = hk.Linear(V)(h2)  # [B, 64]
+  h2 = hk.Linear(core.shape[-1], name="head_to_inproj")(h2); h2 = jnn.silu(h2)
+  logits_to = hk.Linear(V, name="head_to")(h2)                     # <— named
 
-  # Head 3: p(promo | from, to) -> first 5 classes used
+  # Head 3: p(promo | from, to)
   h3 = jnp.concatenate([core, from_oh, to_oh], axis=-1)
-  h3 = hk.Linear(core.shape[-1])(h3); h3 = jnn.silu(h3)
-  logits_promo5 = hk.Linear(5)(h3)       # [B, 5]
-  # Pad to 64 so we can return [B, 64]; unused classes won't be targeted.
-  pad = jnp.full((B, V - 5), -1e9, dtype=logits_promo5.dtype)
-  logits_promo = jnp.concatenate([logits_promo5, pad], axis=-1)  # [B, 64]
+  h3 = hk.Linear(core.shape[-1], name="head_promo_inproj")(h3); h3 = jnn.silu(h3)
+  logits_promo5 = hk.Linear(5, name="head_promo5")(h3)             # <— named
 
-  # Now place the three heads into the final [B, T, V] tensor.
+  pad = jnp.full((B, V - 5), -1e9, dtype=logits_promo5.dtype)
+  logits_promo = jnp.concatenate([logits_promo5, pad], axis=-1)
+
   logits = jnp.zeros((B, T, V), dtype=logits_from.dtype)
   logits = logits.at[:, -3, :].set(logits_from)
   logits = logits.at[:, -2, :].set(logits_to)
   logits = logits.at[:, -1, :].set(logits_promo)
-
   return jnn.log_softmax(logits, axis=-1)
 
 
