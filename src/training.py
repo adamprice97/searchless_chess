@@ -96,10 +96,6 @@ def train(
         targets=dummy_targets,
   )
   params_ema = copy.deepcopy(params)
-
-  logging.info("SHAPE[ema_init] state_token_embed_v2/embeddings=%s",
-             _shape_dict(params_ema).get("state_token_embed_v2/embeddings"))
-
   # Create the optimizer and initialize its state.
   optimizer = optax.chain(
       optax.clip_by_global_norm(train_config.max_grad_norm),
@@ -124,8 +120,6 @@ def train(
   sharding = sharding.reshape((jax.device_count(), 1))
   params = training_utils.replicate(params, sharding)
   params_ema = training_utils.replicate(params_ema, sharding)
-  logging.info("SHAPE[sharding] state_token_embed_v2/embeddings=%s",
-             _shape_dict(params_ema).get("state_token_embed_v2/embeddings"))
   opt_state = training_utils.replicate(opt_state, sharding)
 
   latest_step = 0
@@ -186,9 +180,6 @@ def train(
         loss_mask=loss_mask,
     )
 
-    logging.info("SHAPE[post update] state_token_embed_v2/embeddings=%s",
-             _shape_dict(params_ema).get("state_token_embed_v2/embeddings"))
-
     if train_config.log_frequency is not None:
       if step % train_config.log_frequency == 0:
         logging.info(
@@ -201,8 +192,6 @@ def train(
     if puzzles_eval_cfg is not None and (step % train_config.puzzles_eval_every == 0):
         # Unreplicate EMA params for eval
         host_params_ema = training_utils.unreplicate(params_ema)
-        shapes = _shape_dict(host_params_ema)
-        logging.info("EMA state_token_embed_v2/table=%s", shapes.get("state_token_embed_v2/table"))
         # Rebuild the puzzles evaluator with current EMA params
         pe = puzzles_evaluator.PuzzlesEvaluator(
             predictor=predictor,

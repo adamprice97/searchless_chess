@@ -92,8 +92,8 @@ def main(argv: Sequence[str]) -> None:
       ),
       log_frequency=100,                      # practical default; adjust if noisy
       num_steps=500_000,                   # ~2.67 epochs on 10M games
-      ckpt_frequency=5_000,                  # sensible cadence
-      save_frequency=5_000,
+      ckpt_frequency=25_000,                  # sensible cadence
+      save_frequency=100_000,
       puzzles_eval_every=5000,
       puzzles_num=1024,
       puzzles_batch_size=256,
