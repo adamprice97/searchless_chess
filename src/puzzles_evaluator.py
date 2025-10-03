@@ -73,16 +73,23 @@ class PuzzlesEvaluator:
     self._predictor = predictor
     self._config = config
 
-    # ... (puzzles_path resolution stays the same)
+    # Resolve puzzles.csv
+    if config.puzzles_path is None:
+      # repo_root/data/puzzles.csv
+      src_dir = Path(__file__).resolve().parent
+      self._puzzles_path = src_dir.parent / "data" / "puzzles.csv"
+    else:
+      self._puzzles_path = Path(config.puzzles_path)
 
-    # 1) Always build the padded/batched predict_fn (even if AR path won’t use it now).
+    if not self._puzzles_path.exists():
+      raise FileNotFoundError(f"Puzzles CSV not found at {self._puzzles_path}")
+
     self._predict_fn = neural_engines.wrap_predict_fn(
         predictor=self._predictor,
         params=params,
         batch_size=self._config.batch_size,
     )
 
-    # 2) If we're doing the param head and we want AR decode, ensure we have a decoder.
     if self._config.policy == "behavioral_cloning_param":
       if decode_apply is None:
         if predictor_config is None:
