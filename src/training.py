@@ -93,6 +93,7 @@ def train(
                     % predictor_config.vocab_size)
   params = predictor.initial_params(
         rng=jrandom.PRNGKey(predictor_config.seed),
+        mode="tf",
         targets=dummy_targets,
   )
   params_ema = copy.deepcopy(params)

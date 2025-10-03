@@ -472,11 +472,34 @@ def param_action_heads(
   return jnn.log_softmax(logits, axis=-1)
 
 
-def build_param_action_predictor(
-    config: TransformerConfig,
-) -> constants.Predictor:
-  """Predictor for the parameterised BC head, compatible with the trainer."""
-  def forward(targets: jax.Array) -> jax.Array:
-    return param_action_heads(targets=targets, config=config)
+def build_param_action_predictor(config: TransformerConfig) -> constants.Predictor:
+  """Predictor with two modes:
+     - mode="tf": returns [B,T,V] log-probs for training/eval (teacher-forced).
+     - mode="ar": returns sampled indices (from*, to*, promo*) for deployment.
+  """
+  def forward(
+      *,
+      mode: str,                      # "tf" or "ar"
+      targets: jax.Array | None = None,        # [B,T] (state + [from,to,promo]) for TF
+      state_tokens: jax.Array | None = None,   # [B,Ts] for AR
+      rng: jax.Array | None = None,
+      greedy: bool = True,
+      temperature: float | None = None,
+  ):
+    if mode == "tf":
+      assert targets is not None, "TF mode requires `targets`"
+      return param_action_heads(targets=targets, config=config)
+
+    elif mode == "ar":
+      assert state_tokens is not None, "AR mode requires `state_tokens`"
+      assert rng is not None, "AR mode requires `rng`"
+      # Use the same heads created during TF init; no new params at apply time.
+      return param_action_decode_autoreg(
+          state_tokens=state_tokens, config=config, rng=rng,
+          greedy=greedy, temperature=temperature
+      )
+    else:
+      raise ValueError(f"Unknown mode: {mode}")
+
   model = hk.transform(forward)
   return constants.Predictor(initial_params=model.init, predict=model.apply)

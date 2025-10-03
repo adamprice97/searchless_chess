@@ -79,7 +79,12 @@ def make_loss_fn(predictor: constants.Predictor) -> Any:
       mask: Mask to apply to the losses. True means the loss will not be
         computed there.
     """
-    conditionals = predictor.predict(params=params, targets=sequences, rng=None)
+    conditionals = predictor.predict(
+      params=params,
+      mode="tf",
+      targets=sequences,
+      rng=None,
+    )
     true_conditionals = jnp.take_along_axis(
         conditionals, sequences[..., None], axis=-1
     )[..., 0]
