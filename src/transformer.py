@@ -69,6 +69,23 @@ class TransformerConfig:
     if self.output_size is None:
       self.output_size = self.vocab_size
 
+class FixedEmbed(hk.Module):
+    """Embedding layer that always allocates [vocab_size, embed_dim]."""
+    def __init__(self, vocab_size: int, embed_dim: int, emb_init_scale: float, name: str):
+        super().__init__(name=name)  # e.g., "state_token_embed"
+        self.vocab_size = vocab_size
+        self.embed_dim = embed_dim
+        self.emb_init = hk.initializers.TruncatedNormal(stddev=emb_init_scale)
+
+    def __call__(self, ids: jax.Array) -> jax.Array:
+        # Canonical leaf name: "embeddings"
+        embeddings = hk.get_parameter(
+            "embeddings",
+            shape=[self.vocab_size, self.embed_dim],
+            init=self.emb_init,
+        )
+        return jnp.take(embeddings, ids, axis=0)
+
 
 class MultiHeadDotProductAttention(hk.Module):
   """Multi-head dot-product attention (Vaswani et al., 2017)."""
@@ -167,20 +184,22 @@ def sinusoid_position_encoding(
   )
   return embeddings[:, :hidden_size]
 
-# transformer.py
-
-def embed_sequences(sequences: jax.Array, config: TransformerConfig) -> jax.Array:
-  embs_init = hk.initializers.TruncatedNormal(stddev=config.emb_init_scale)
-  token_embeddings = hk.Embed(
+def embed_sequences(
+    sequences: jax.Array,
+    config: TransformerConfig,
+    name: str = "token_embed",
+) -> jax.Array:
+  # Force-allocate full table under its own module scope (name/embeddings)
+  token_embeddings = FixedEmbed(
       vocab_size=config.vocab_size,
       embed_dim=config.embedding_dim,
-      lookup_style=hk.EmbedLookupStyle.ARRAY_INDEX,
-      w_init=embs_init,
-      name="token_embed",            # ← give it a unique name
+      emb_init_scale=config.emb_init_scale,
+      name=name,              
   )
   embeddings = token_embeddings(sequences)
-  embeddings *= jnp.sqrt(config.embedding_dim)
+  embeddings = embeddings * jnp.sqrt(config.embedding_dim)
 
+  # Positional encodings (unchanged)
   _, sequence_length, embedding_size = embeddings.shape
   match config.pos_encodings:
     case PositionalEncodings.SINUSOID:
@@ -194,9 +213,10 @@ def embed_sequences(sequences: jax.Array, config: TransformerConfig) -> jax.Arra
       pos_encodings = hk.Embed(
           vocab_size=config.max_sequence_length,
           embed_dim=embedding_size,
-          name="pos_embed",           # ← and a different name here
+          name="pos_embed",
       )(positions)
   return embeddings + pos_encodings
+
 
 def layer_norm(x: jax.Array) -> jax.Array:
   """Helper function for layer norm."""
@@ -288,7 +308,7 @@ def _encode_state_core(targets: jax.Array, config: TransformerConfig) -> jax.Arr
   state_tokens = targets[:, :state_len]  # [B, Ts]
   # Standard embedding + (non-causal) transformer layers to get a core.
   # We reuse embed_sequences for positional encodings.
-  x = embed_sequences(state_tokens, config)  # [B, Ts, D]
+  x = embed_sequences(state_tokens, config, name='state_token_embed')  # [B, Ts, D]
 
   # Use the same block stack but without causal masking.
   non_causal_cfg = dataclasses.replace(config, use_causal_mask=False)

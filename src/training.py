@@ -34,6 +34,19 @@ from searchless_chess.src import transformer
 from searchless_chess.src import puzzles_evaluator
 from searchless_chess.src import metrics_evaluator
 
+def _shape_dict(p):
+    """Return { 'module/sub/param': shape } for a Haiku params pytree."""
+    def _flatten(d, prefix=()):
+        if isinstance(d, dict):
+            for k, v in d.items():
+                yield from _flatten(v, prefix + (k,))
+        else:
+            yield "/".join(prefix), getattr(d, "shape", ())
+    # hk.data_structures.to_mutable_dict works across HK versions
+    flat = hk.data_structures.to_mutable_dict(p)
+    return dict(_flatten(flat))
+
+
 def train(
     train_config: config_lib.TrainConfig,
     predictor_config: transformer.TransformerConfig,
@@ -48,7 +61,12 @@ def train(
   )
 
   # Build the predictor and the data loader.
-  predictor = transformer.build_transformer_predictor(predictor_config)
+  if train_config.data.policy == 'behavioral_cloning_param':
+    predictor = transformer.build_param_action_predictor(predictor_config)
+    dummy_len = 3
+  else:
+    predictor = transformer.build_transformer_predictor(predictor_config)
+    dummy_len = 1
 
   puzzles_eval_cfg = puzzles_evaluator.PuzzlesEvalConfig(
       puzzles_path=getattr(train_config, "puzzles_path", None),
@@ -69,12 +87,18 @@ def train(
 
   # Initialize the predictor parameters.
   logging.info('Initializing the predictor parameters.')
+  
+  dummy_len = 31
+  dummy_targets = (np.arange(dummy_len, dtype=np.uint32)[None, :]
+                    % predictor_config.vocab_size)
   params = predictor.initial_params(
-      rng=jrandom.PRNGKey(predictor_config.seed),
-      targets=np.zeros((1, 1), dtype=np.uint32),
+        rng=jrandom.PRNGKey(predictor_config.seed),
+        targets=dummy_targets,
   )
-
   params_ema = copy.deepcopy(params)
+
+  logging.info("SHAPE[ema_init] state_token_embed_v2/embeddings=%s",
+             _shape_dict(params_ema).get("state_token_embed_v2/embeddings"))
 
   # Create the optimizer and initialize its state.
   optimizer = optax.chain(
@@ -100,6 +124,8 @@ def train(
   sharding = sharding.reshape((jax.device_count(), 1))
   params = training_utils.replicate(params, sharding)
   params_ema = training_utils.replicate(params_ema, sharding)
+  logging.info("SHAPE[sharding] state_token_embed_v2/embeddings=%s",
+             _shape_dict(params_ema).get("state_token_embed_v2/embeddings"))
   opt_state = training_utils.replicate(opt_state, sharding)
 
   latest_step = 0
@@ -109,7 +135,7 @@ def train(
     logging.info('Initializing the checkpoint manager.')
     checkpoint_dir = os.path.join(
         os.getcwd(),
-        f'../checkpoints/local/{train_config.data.policy}',
+        f'checkpoints/local/{train_config.data.policy}',
     )
     checkpoint_manager = training_utils.get_checkpoint_manager(
         ckpt_frequency=train_config.ckpt_frequency,
@@ -160,6 +186,9 @@ def train(
         loss_mask=loss_mask,
     )
 
+    logging.info("SHAPE[post update] state_token_embed_v2/embeddings=%s",
+             _shape_dict(params_ema).get("state_token_embed_v2/embeddings"))
+
     if train_config.log_frequency is not None:
       if step % train_config.log_frequency == 0:
         logging.info(
@@ -172,7 +201,8 @@ def train(
     if puzzles_eval_cfg is not None and (step % train_config.puzzles_eval_every == 0):
         # Unreplicate EMA params for eval
         host_params_ema = training_utils.unreplicate(params_ema)
-
+        shapes = _shape_dict(host_params_ema)
+        logging.info("EMA state_token_embed_v2/table=%s", shapes.get("state_token_embed_v2/table"))
         # Rebuild the puzzles evaluator with current EMA params
         pe = puzzles_evaluator.PuzzlesEvaluator(
             predictor=predictor,

@@ -29,6 +29,7 @@ from searchless_chess.src import training
 from searchless_chess.src import transformer
 from searchless_chess.src import utils
 
+from absl import logging
 
 _POLICY = flags.DEFINE_enum(
     'policy',
@@ -61,8 +62,8 @@ def main(argv: Sequence[str]) -> None:
   # Data: 10M-game train set. Optimizer: Adam, lr=1e-4, batch=4096, 10M steps.
 
   predictor_config = transformer.TransformerConfig(
-      #vocab_size=tokenizer.VOCAB_SIZE,           # keep as-is per your API
-      vocab_size=utils.NUM_ACTIONS,
+      vocab_size=tokenizer.VOCAB_SIZE,           # keep as-is per your API
+      #vocab_size=utils.NUM_ACTIONS,
       output_size=output_size,          
       pos_encodings=transformer.PositionalEncodings.LEARNED,
       max_sequence_length=max_sequence_length,     # BC context length
@@ -76,7 +77,7 @@ def main(argv: Sequence[str]) -> None:
 
   puzzles_path = os.path.join(
       os.getcwd(),
-      'data/puzzles.csv',
+      'searchless_chess/data/puzzles.csv',
   )
 
   train_config = config_lib.TrainConfig(
@@ -84,7 +85,7 @@ def main(argv: Sequence[str]) -> None:
       data=config_lib.DataConfig(
           batch_size=512,                    # paper main setup
           shuffle=True,
-          worker_count=0,
+          worker_count=8,
           num_return_buckets=0,               # BC has no value bins
           policy=policy,
           split='train',
@@ -93,16 +94,16 @@ def main(argv: Sequence[str]) -> None:
       num_steps=500_000,                   # ~2.67 epochs on 10M games
       ckpt_frequency=5_000,                  # sensible cadence
       save_frequency=5_000,
-      puzzles_eval_every=1,
-      puzzles_num=8,
-      puzzles_batch_size=4,
+      puzzles_eval_every=5000,
+      puzzles_num=1024,
+      puzzles_batch_size=256,
       puzzles_path=puzzles_path,
       eval=config_lib.EvalConfig(
         policy=policy,
-        data=config_lib.DataConfig(policy=None, num_return_buckets=0, split="test", batch_size=512, num_records=1024),
+        data=config_lib.DataConfig(policy=None, num_return_buckets=0, split="test", batch_size=512, num_records=2048, worker_count=2),
         num_return_buckets=0,
-        num_eval_data=512,
-        batch_size=64,
+        num_eval_data=2048,
+        batch_size=256,
       ),
   )
 
@@ -110,7 +111,7 @@ def main(argv: Sequence[str]) -> None:
       data=config_lib.DataConfig(
           batch_size=512,                    # eval throughput
           shuffle=False,
-          worker_count=0,
+          worker_count=8,
           num_return_buckets=0,               # BC
           policy=None,                        # pytype: disable=wrong-arg-types
           split='test',
@@ -133,7 +134,6 @@ def main(argv: Sequence[str]) -> None:
   else:
     predictor = transformer.build_transformer_predictor(predictor_config)
 
-  predictor = transformer.build_transformer_predictor(predictor_config)
   evaluator = metrics_evaluator.build_evaluator(predictor, eval_config)
   print(evaluator.step(params=params, step=train_config.num_steps))
 
