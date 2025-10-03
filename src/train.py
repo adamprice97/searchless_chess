@@ -139,4 +139,5 @@ def main(argv: Sequence[str]) -> None:
 
 
 if __name__ == '__main__':
+  logging.get_absl_handler().use_absl_log_file('train_run')
   app.run(main)
