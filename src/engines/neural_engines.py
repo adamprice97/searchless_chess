@@ -231,15 +231,13 @@ class ParamBCEngine(Engine):
 
         # JAX PRNG key (deterministic enough for a run)
         seed = int(self._np_rng.integers(0, 2**31 - 1))
-        key = jax.random.PRNGKey(seed)
-
+        
         # One-call AR decode using the SAME params tree as training.
         # NOTE: predictor.predict is Haiku apply; first two args are (params, state).
         from_idx, to_idx, promo_idx = self._predictor.predict(
             self.params,
             mode="ar",
             state_tokens=state_tokens,
-            rng=key,
             greedy=self.greedy,
             temperature=self.temperature,
         )

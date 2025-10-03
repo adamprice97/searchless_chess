@@ -482,7 +482,6 @@ def build_param_action_predictor(config: TransformerConfig) -> constants.Predict
       mode: str,                      # "tf" or "ar"
       targets: jax.Array | None = None,        # [B,T] (state + [from,to,promo]) for TF
       state_tokens: jax.Array | None = None,   # [B,Ts] for AR
-      rng: jax.Array | None = None,
       greedy: bool = True,
       temperature: float | None = None,
   ):
@@ -492,10 +491,9 @@ def build_param_action_predictor(config: TransformerConfig) -> constants.Predict
 
     elif mode == "ar":
       assert state_tokens is not None, "AR mode requires `state_tokens`"
-      assert rng is not None, "AR mode requires `rng`"
       # Use the same heads created during TF init; no new params at apply time.
       return param_action_decode_autoreg(
-          state_tokens=state_tokens, config=config, rng=rng,
+          state_tokens=state_tokens, config=config, rng=jax.random.PRNGKey(),
           greedy=greedy, temperature=temperature
       )
     else:
