@@ -197,6 +197,7 @@ def train(
             predictor=predictor,
             params=host_params_ema,
             config=puzzles_eval_cfg,  # the config object
+            predictor_config=predictor_config,
         )
         pz_metrics = pe.step()
         logging.info("PUZZLES EVAL step=%d %s", step,

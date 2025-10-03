@@ -204,42 +204,29 @@ class ParamBCEngine(NeuralEngine):
     promo = promo_map.get(uci[4], 0) if len(uci) == 5 else 0
     return from_idx, to_idx, promo
 
-  def analyse(self, board: chess.Board) -> engine.AnalysisResult:
-    """Returns log-probs over legal moves under the parameterised head."""
-    # Tokenize board once
-    tokenized_fen = tokenizer.tokenize(board.fen()).astype(np.int32)
-    state_len = tokenized_fen.shape[0]
+class ParamBCEngine(NeuralEngine):
+  def __init__(self, predict_fn, params, decode_apply, temperature=None, greedy=True):
+    super().__init__(predict_fn=predict_fn, temperature=temperature)
+    self.params = params                 # hk.Params (EMA or raw)
+    self._decode_apply = decode_apply    # decoder.apply
+    self.greedy = greedy                 # True: argmax, False: sample
 
-    # Build one sequence per legal move, teacher-forcing (from,to,promo)
-    sorted_legal_moves = engine.get_ordered_legal_moves(board)
-    legals_uci = [m.uci() for m in sorted_legal_moves]
-    params = np.array([self._uci_to_params(u) for u in legals_uci], dtype=np.int32)  # [N,3]
-
-    N = len(legals_uci)
-    states = np.repeat(tokenized_fen[None, :], N, axis=0)                             # [N, Ts]
-    sequences = np.concatenate([states, params], axis=1).astype(np.int32)            # [N, Ts+3]
-
-    # Predictor returns log-probs [N, T, V]. We need the last 3 positions.
-    out = self.predict_fn(sequences)                                                 # [N, T, V]
-    # Gather the three log-probs we care about:
-    from_lp  = np.take_along_axis(out[:, -3, :], params[:, 0:1], axis=-1)[:, 0]      # [N]
-    to_lp    = np.take_along_axis(out[:, -2, :], params[:, 1:2], axis=-1)[:, 0]      # [N]
-    promo_lp = np.take_along_axis(out[:, -1, :], params[:, 2:3], axis=-1)[:, 0]      # [N]
-    action_log_probs = from_lp + to_lp + promo_lp                                    # [N]
-
-    # Renormalize across the legal set (optional but nice for temperature sampling).
-    action_log_probs = jnn.log_softmax(action_log_probs)
-
-    return {'log_probs': action_log_probs, 'fen': board.fen()}
+  @staticmethod
+  def _params_to_uci(from_idx: int, to_idx: int, promo_idx: int) -> str:
+    files = "abcdefgh"
+    def idx_to_sq(i: int) -> str: return f"{files[i % 8]}{1 + i // 8}"
+    promo_map = {0: "", 1: "q", 2: "r", 3: "b", 4: "n"}
+    return idx_to_sq(from_idx) + idx_to_sq(to_idx) + promo_map.get(promo_idx, "")
 
   def play(self, board: chess.Board) -> chess.Move:
-    action_log_probs = self.analyse(board)['log_probs']   # [N]
-    sorted_legal_moves = engine.get_ordered_legal_moves(board)
-    if self.temperature is not None:
-      probs = scipy.special.softmax(action_log_probs / self.temperature, axis=-1)
-      return self._rng.choice(sorted_legal_moves, p=probs)
-    else:
-      return sorted_legal_moves[int(np.argmax(action_log_probs))]
+    # AR decode from model (no legal filtering)
+    tokenized_fen = tokenizer.tokenize(board.fen()).astype(np.int32)[None, :]  # [1, Ts]
+    rng = jax.random.PRNGKey(int(np.random.randint(0, 2**31 - 1)))
+    f_idx, t_idx, p_idx = self._decode_apply(
+        self.params, None, tokenized_fen, rng, greedy=self.greedy, temperature=self.temperature
+    )
+    f = int(np.array(f_idx[0])); t = int(np.array(t_idx[0])); p = int(np.array(p_idx[0]))
+    return chess.Move.from_uci(self._params_to_uci(f, t, p))
 
 def wrap_predict_fn(
     predictor: constants.Predictor,

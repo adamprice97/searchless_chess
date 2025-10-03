@@ -18,7 +18,7 @@ import haiku as hk
 from absl import logging
 
 from searchless_chess.src import constants
-from searchless_chess.src import tokenizer
+from searchless_chess.src import transformer
 from searchless_chess.src.engines import neural_engines
 
 
@@ -68,6 +68,7 @@ class PuzzlesEvaluator:
       predictor: constants.Predictor,
       params: hk.Params,
       config: PuzzlesEvalConfig,
+      predictor_config: transformer.TransformerConfig
   ) -> None:
     self._predictor = predictor
     self._config = config
@@ -84,12 +85,25 @@ class PuzzlesEvaluator:
       raise FileNotFoundError(f"Puzzles CSV not found at {self._puzzles_path}")
 
     # Build a padded/batched predict_fn (handles arbitrary batch sizes)
-    self._predict_fn = neural_engines.wrap_predict_fn(
-        predictor=self._predictor,
-        params=params,
-        batch_size=self._config.batch_size,
-    )
-    self._engine = _engine_from_policy(self._config.policy, self._predict_fn)
+    if self._config.policy == "behavioral_cloning_param":
+      decoder = transformer.build_param_action_decoder(predictor_config)
+      decode_apply = decoder.apply
+
+      self._engine = neural_engines.ParamBCEngine(
+        predict_fn=self._predict_fn,   # still available if you want the old ranking mode later
+        params=params,                 # EMA params you unreplicate for eval
+        decode_apply=decode_apply,
+        temperature=None,              # or >0.0 if you want sampling
+        greedy=True,                   # False to sample stochastically
+      )
+    else:
+      self._predict_fn = neural_engines.wrap_predict_fn(
+       predictor=self._predictor,
+       params=params,
+       batch_size=self._config.batch_size,
+      )
+      self._engine = _engine_from_policy(self._config.policy, self._predict_fn)
+
 
   def step(self) -> Mapping[str, float]:
     """Return dict of metrics for logging (accuracy, counts, avg rating)."""

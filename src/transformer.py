@@ -151,6 +151,103 @@ class MultiHeadDotProductAttention(hk.Module):
     output = jnp.reshape(output, (batch_size, sequence_length, num_hiddens))
     return hk.Linear(embedding_size, with_bias=False)(output)
 
+def _heads_logits_from_core(
+    core: jax.Array,
+    from_oh: jax.Array | None,
+    to_oh: jax.Array | None,
+    *,
+    config: TransformerConfig,
+) -> tuple[jax.Array, jax.Array, jax.Array]:
+  """Return logits for (from, to, promo64)."""
+  B = core.shape[0]
+  V = 64
+
+  # Head 1
+  logits_from = hk.Linear(V, name="head_from")(core)
+
+  # Head 2 (cond on from)
+  if from_oh is None:
+    from_oh = jnp.zeros((B, V), dtype=core.dtype)
+  h2 = jnp.concatenate([core, from_oh], axis=-1)
+  h2 = hk.Linear(core.shape[-1], name="head_to_pre")(h2); h2 = jnn.silu(h2)
+  logits_to = hk.Linear(V, name="head_to")(h2)
+
+  # Head 3 (cond on from, to)
+  if to_oh is None:
+    to_oh = jnp.zeros((B, V), dtype=core.dtype)
+  h3 = jnp.concatenate([core, from_oh, to_oh], axis=-1)
+  h3 = hk.Linear(core.shape[-1], name="head_promo_pre")(h3); h3 = jnn.silu(h3)
+  logits_promo5 = hk.Linear(5, name="head_promo")(h3)
+  pad = jnp.full((B, V - 5), -1e9, dtype=logits_promo5.dtype)
+  logits_promo = jnp.concatenate([logits_promo5, pad], axis=-1)
+  return logits_from, logits_to, logits_promo
+
+
+def _encode_state_core_from_state(state_tokens: jax.Array, config: TransformerConfig) -> jax.Array:
+  """Same as _encode_state_core but input is just the state tokens [B, Ts]."""
+  # Non-causal stack over just the state tokens:
+  x = embed_sequences(state_tokens, config, name='state_token_embed')  # [B, Ts, D]
+  non_causal_cfg = dataclasses.replace(config, use_causal_mask=False)
+  h = x
+  for _ in range(non_causal_cfg.num_layers):
+    attention_input = layer_norm(h)
+    attention = _attention_block(attention_input, non_causal_cfg)
+    h += attention
+    mlp_input = layer_norm(h)
+    mlp_output = _mlp_block(mlp_input, non_causal_cfg)
+    h += mlp_output
+  if non_causal_cfg.apply_post_ln:
+    h = layer_norm(h)
+  return jnp.mean(h, axis=1)  # [B, D]
+
+
+def param_action_decode_autoreg(
+    state_tokens: jax.Array,    # [B, Ts]
+    config: TransformerConfig,
+    rng: jax.Array,
+    *,
+    greedy: bool = True,        # if False, sample with temperature
+    temperature: float | None = None,
+) -> tuple[jax.Array, jax.Array, jax.Array]:
+  """One-call AR decode: sample from*, then to*|from*, then promo*|from*,to*."""
+  V = 64
+  B = state_tokens.shape[0]
+  core = _encode_state_core_from_state(state_tokens, config)  # [B, D]
+
+  def _maybe_temp(lg, t):
+    return lg if (t is None or t == 0.0) else (lg / t)
+
+  rng1, rng2, rng3 = jax.random.split(rng, 3)
+
+  # from
+  logits_from, _, _ = _heads_logits_from_core(core, None, None, config=config)
+  logits_from = _maybe_temp(logits_from, None if greedy else temperature)
+  from_idx = jnp.argmax(logits_from, axis=-1) if greedy else \
+             jax.random.categorical(rng1, logits_from, axis=-1)
+  from_oh = jax.nn.one_hot(from_idx, V)
+
+  # to | from
+  _, logits_to, _ = _heads_logits_from_core(core, from_oh, None, config=config)
+  logits_to = _maybe_temp(logits_to, None if greedy else temperature)
+  to_idx = jnp.argmax(logits_to, axis=-1) if greedy else \
+           jax.random.categorical(rng2, logits_to, axis=-1)
+  to_oh = jax.nn.one_hot(to_idx, V)
+
+  # promo | from, to
+  _, _, logits_promo = _heads_logits_from_core(core, from_oh, to_oh, config=config)
+  logits_p5 = logits_promo[:, :5]
+  logits_p5 = _maybe_temp(logits_p5, None if greedy else temperature)
+  promo_idx = jnp.argmax(logits_p5, axis=-1) if greedy else \
+              jax.random.categorical(rng3, logits_p5, axis=-1)
+
+  return from_idx.astype(jnp.int32), to_idx.astype(jnp.int32), promo_idx.astype(jnp.int32)
+
+
+def build_param_action_decoder(config: TransformerConfig):
+  """Expose as Haiku transform so you can call with trained params."""
+  def forward(state_tokens: jax.Array, rng: jax.Array, greedy: bool = True, temperature: float | None = None):
+    return param_action_decode_autoreg(state_tokens, config=config, rng=rng, greedy=greedy, temperature=temperature)
+  return hk.transform(forward)
 
 def sinusoid_position_encoding(
     sequence_length: int,
