@@ -236,7 +236,7 @@ class ParamBCEngine(Engine):
         # One-call AR decode using the SAME params tree as training.
         # NOTE: predictor.predict is Haiku apply; first two args are (params, state).
         from_idx, to_idx, promo_idx = self._predictor.predict(
-            self.params, None,
+            self.params,
             mode="ar",
             state_tokens=state_tokens,
             rng=key,
