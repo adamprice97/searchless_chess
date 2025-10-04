@@ -301,15 +301,25 @@ def build_transformer_predictor(
   model = hk.transform(functools.partial(transformer_decoder, config=config))
   return constants.Predictor(initial_params=model.init, predict=model.apply)
 
+def attention_pool(H, num_heads: int, name="attn_pool"):
+  D = H.shape[-1]
+  q = hk.get_parameter(f"{name}_query", shape=(1, 1, D),
+                       init=hk.initializers.RandomNormal(stddev=1e-2))
+  q = jnp.repeat(q, H.shape[0], axis=0)  # [B,1,D]
+  attn = hk.MultiHeadAttention(
+      num_heads=num_heads,
+      key_size=D // num_heads,
+      w_init_scale=1.0,
+      name=name)
+  pooled = attn(q, H, H)[:, 0, :]  # [B, D]
+  return pooled
+
 def _encode_state_core(targets: jax.Array, config: TransformerConfig) -> jax.Array:
   """Embeds the state tokens (everything before the last 3) into a single vector."""
   # targets shape: [B, T_total]; state length = T_total - 3
   state_len = targets.shape[1] - 3
   state_tokens = targets[:, :state_len]  # [B, Ts]
-  # Standard embedding + (non-causal) transformer layers to get a core.
-  # We reuse embed_sequences for positional encodings.
   x = embed_sequences(state_tokens, config, name='state_token_embed')  # [B, Ts, D]
-
   # Use the same block stack but without causal masking.
   non_causal_cfg = dataclasses.replace(config, use_causal_mask=False)
   h = x
@@ -323,8 +333,7 @@ def _encode_state_core(targets: jax.Array, config: TransformerConfig) -> jax.Arr
   if non_causal_cfg.apply_post_ln:
     h = layer_norm(h)
 
-  # Pool to a single core vector; mean-pool works well here.
-  core = jnp.mean(h, axis=1)  # [B, D]
+  core = attention_pool(h, num_heads=config.num_heads, name="attn_pool") 
   return core
 
 def _mlp_block_param(x, hidden_dim: int, name: str):
