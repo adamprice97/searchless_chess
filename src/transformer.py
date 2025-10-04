@@ -327,9 +327,21 @@ def _encode_state_core(targets: jax.Array, config: TransformerConfig) -> jax.Arr
   core = jnp.mean(h, axis=1)  # [B, D]
   return core
 
+def _mlp_block_param(x, hidden_dim: int, name: str):
+  """Tiny MLP: LayerNorm -> Linear -> SiLU -> Linear -> SiLU, with residual if dims match."""
+  with hk.experimental.name_scope(name):
+    ln = hk.LayerNorm(axis=-1, create_scale=True, create_offset=True)
+    h = ln(x)
+    h = hk.Linear(hidden_dim)(h); h = jnn.silu(h)
+    h = hk.Linear(hidden_dim)(h); h = jnn.silu(h)
+    # Residual if shapes line up.
+    if h.shape[-1] == x.shape[-1]:
+      h = h + x
+    return h
+
 def param_action_heads(
     targets: jax.Array,  # [B, T] = (state tokens) + [from, to, promo]
-    config: TransformerConfig,
+    config,              # TransformerConfig (not used directly here except via _encode_state_core)
 ) -> jax.Array:
   """Returns log-probs shaped [B, T, V] with V=64; last 3 steps are valid.
 
@@ -342,38 +354,45 @@ def param_action_heads(
 
   # Compute core from the state.
   core = _encode_state_core(targets, config)  # [B, D]
+  D = core.shape[-1]
+  H = max(128, D)  # small head MLP width
 
   # Teacher-forcing: use the ground-truth 'from' and 'to' tokens for conditioning.
-  from_gt = targets[:, -3]            # [B], ints in [0,63]
-  to_gt = targets[:, -2]              # [B], ints in [0,63]
+  from_gt = targets[:, -3]               # [B]
+  to_gt   = targets[:, -2]               # [B]
   from_oh = jax.nn.one_hot(from_gt, 64)  # [B, 64]
   to_oh   = jax.nn.one_hot(to_gt, 64)    # [B, 64]
 
+  # Optionally give the one-hots a tiny projection before concat (helps capacity without huge concat dims).
+  from_feat = _mlp_block_param(from_oh, 64, name="from_proj")   # [B, 64]
+  to_feat   = _mlp_block_param(to_oh,   64, name="to_proj")     # [B, 64]
+
   # Head 1: p(from)
-  h1 = jnp.concatenate([core], axis=-1)
-  logits_from = hk.Linear(V)(h1)  # [B, 64]
+  h1_in = core                                         # [B, D]
+  h1 = _mlp_block_param(h1_in, H, name="head_from_mlp")      # [B, H]
+  logits_from = hk.Linear(V, name="head_from_out")(h1) # [B, 64]
 
   # Head 2: p(to | from)
-  h2 = jnp.concatenate([core, from_oh], axis=-1)
-  h2 = hk.Linear(core.shape[-1])(h2); h2 = jnn.silu(h2)
-  logits_to = hk.Linear(V)(h2)  # [B, 64]
+  h2_in = jnp.concatenate([core, from_feat], axis=-1)               # [B, D+64]
+  h2 = _mlp_block_param(h2_in, H, name="head_to_mlp")                      # [B, H]
+  logits_to = hk.Linear(V, name="head_to_out")(h2)                   # [B, 64]
 
   # Head 3: p(promo | from, to) -> first 5 classes used
-  h3 = jnp.concatenate([core, from_oh, to_oh], axis=-1)
-  h3 = hk.Linear(core.shape[-1])(h3); h3 = jnn.silu(h3)
-  logits_promo5 = hk.Linear(5)(h3)       # [B, 5]
+  h3_in = jnp.concatenate([core, from_feat, to_feat], axis=-1)       # [B, D+64+64]
+  h3 = _mlp_block_param(h3_in, H, name="head_promo_mlp")                   # [B, H]
+  logits_promo5 = hk.Linear(5, name="head_promo_out")(h3)            # [B, 5]
+
   # Pad to 64 so we can return [B, 64]; unused classes won't be targeted.
   pad = jnp.full((B, V - 5), -1e9, dtype=logits_promo5.dtype)
-  logits_promo = jnp.concatenate([logits_promo5, pad], axis=-1)  # [B, 64]
+  logits_promo = jnp.concatenate([logits_promo5, pad], axis=-1)      # [B, 64]
 
-  # Now place the three heads into the final [B, T, V] tensor.
+  # Assemble [B, T, V]
   logits = jnp.zeros((B, T, V), dtype=logits_from.dtype)
   logits = logits.at[:, -3, :].set(logits_from)
   logits = logits.at[:, -2, :].set(logits_to)
   logits = logits.at[:, -1, :].set(logits_promo)
 
   return jnn.log_softmax(logits, axis=-1)
-
 
 def build_param_action_predictor(
     config: TransformerConfig,
