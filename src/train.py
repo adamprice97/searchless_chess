@@ -55,7 +55,7 @@ def main(argv: Sequence[str]) -> None:
       output_size = utils.NUM_ACTIONS
     case 'behavioral_cloning_param':
       output_size = 64  # unified head vocab for (from/to/promo)
-      max_sequence_length += 1
+      max_sequence_length += 2
 
   # === BEHAVIORAL CLONING (BC) — MAIN SETUP ===
   # Model: 16 layers, 8 heads, d_model=1024, learned pos encodings, no causal mask.
