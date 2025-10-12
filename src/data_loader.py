@@ -142,12 +142,45 @@ class ConvertBehavioralCloningParamToSequence(ConvertToSequence):
     params = np.asarray([from_sq, to_sq, promo], dtype=np.int32)
     sequence = np.concatenate([state, params])
     return sequence, self._loss_mask
+  
+class ConvertActionValueParamDataToSequence(ConvertToSequence):
+  """(ADDED) Converts fen + (from,to,promo) + win probability into a sequence.
+
+  Layout: (state) + (from, to, promo) + (return bucket)
+  """
+
+  @property
+  def _sequence_length(self) -> int:
+    # state + 3 action params + 1 return bucket
+    return tokenizer.SEQUENCE_LENGTH + 4
+
+  def map(
+      self, element: bytes
+  ) -> tuple[constants.Sequences, constants.LossMask]:
+    # Expected coder: constants.CODERS['action_value'] or a twin that returns (fen, uci_move, win_prob)
+    fen, move, win_prob = constants.CODERS['action_value'].decode(element)
+
+    # Tokenize board state
+    state = _process_fen(fen)
+
+    # Convert move to (from_sq, to_sq, promo) — squares in [0..63], promo in [0..4] (0=no promo)
+    from_sq, to_sq, promo = utils.move_to_params(move)
+    params = np.asarray([from_sq, to_sq, promo], dtype=np.int32)
+
+    # Bucketize the target return
+    return_bucket = _process_win_prob(win_prob, self._return_buckets_edges)
+
+    # Full input sequence
+    sequence = np.concatenate([state, params, return_bucket])
+    return sequence, self._loss_mask
+
 
 
 _TRANSFORMATION_BY_POLICY = {
     'behavioral_cloning': ConvertBehavioralCloningDataToSequence,
     'behavioral_cloning_param': ConvertBehavioralCloningParamToSequence,  
     'action_value': ConvertActionValueDataToSequence,
+    'action_value_param': ConvertActionValueParamDataToSequence,
     'state_value': ConvertStateValueDataToSequence,
 }
 

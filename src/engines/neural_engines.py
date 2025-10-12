@@ -102,6 +102,20 @@ class ActionValueEngine(NeuralEngine):
       best_index = np.argmax(win_probs)
       return sorted_legal_moves[best_index]
 
+class ActionValueParamEngine(NeuralEngine):
+  """(ADDED) Neural engine using P(r | s, from, to, promo)."""
+
+  def analyse(self, board: chess.Board) -> engine.AnalysisResult:
+    """Returns buckets log-probs for each legal move and the FEN."""
+    sorted_legal_moves = engine.get_ordered_legal_moves(board)
+    legals_uci = [x.uci() for x in sorted_legal_moves]
+    params = np.array([utils.move_to_params(u) for u in legals_uci], dtype=np.int32)  # [N,3]
+    dummy_return = np.zeros((len(params), 1), dtype=np.int32)
+    tokenized_fen = tokenizer.tokenize(board.fen()).astype(np.int32)
+    states = np.repeat(tokenized_fen[None, :], len(params), axis=0) 
+    sequences = np.concatenate([states, params, dummy_return], axis=1).astype(np.int32)
+
+    return {'log_probs': self.predict_fn(sequences)[:, -1], 'fen': board.fen()}
 
 class StateValueEngine(NeuralEngine):
   """Neural engine using a function P(r | s)."""
@@ -281,6 +295,7 @@ def wrap_predict_fn(
 
 ENGINE_FROM_POLICY = {
     'action_value': ActionValueEngine,
+    'action_value_param': ActionValueParamEngine,
     'state_value': StateValueEngine,
     'behavioral_cloning': BCEngine,
     'behavioral_cloning_param': ParamBCEngine, 

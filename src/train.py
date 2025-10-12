@@ -51,6 +51,9 @@ def main(argv: Sequence[str]) -> None:
   match policy:
     case 'action_value' | 'state_value':
       output_size = num_return_buckets
+    case 'action_value_param':
+      output_size = num_return_buckets 
+      max_sequence_length += 2 
     case 'behavioral_cloning':
       output_size = utils.NUM_ACTIONS
     case 'behavioral_cloning_param':
@@ -67,8 +70,8 @@ def main(argv: Sequence[str]) -> None:
       output_size=output_size,          
       pos_encodings=transformer.PositionalEncodings.LEARNED,
       max_sequence_length=max_sequence_length,     # BC context length
-      num_heads=4,
-      num_layers=4,
+      num_heads=8,
+      num_layers=8,
       embedding_dim=256,                     # d_model
       apply_post_ln=True,                     # post-norm + SwiGLU in paper
       apply_qk_layernorm=False,
@@ -90,7 +93,7 @@ def main(argv: Sequence[str]) -> None:
           policy=policy,
           split='train',
       ),
-      log_frequency=100,                      # practical default; adjust if noisy
+      log_frequency=500,                      # practical default; adjust if noisy
       num_steps=500_000,                   # ~2.67 epochs on 10M games
       ckpt_frequency=25_000,                  # sensible cadence
       save_frequency=100_000,
