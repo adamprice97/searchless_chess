@@ -21,6 +21,8 @@ from searchless_chess.src import constants
 from searchless_chess.src import tokenizer
 from searchless_chess.src.engines import neural_engines
 
+from searchless_chess.src import utils
+from searchless_chess.src.engines import engine as engines_core
 
 @dataclass
 class PuzzlesEvalConfig:
@@ -28,7 +30,7 @@ class PuzzlesEvalConfig:
   num_puzzles: int = 512                # how many to evaluate each time
   batch_size: int = 64                  # for the predict_fn wrapper
   policy: str = "behavioral_cloning_param"  # used to choose engine
-
+  num_return_buckets: int = 128
 
 def _evaluate_puzzle_from_board(
     board: chess.Board,
@@ -50,15 +52,51 @@ def _evaluate_puzzle_from_board(
     board.push(chess.Move.from_uci(move))
   return True
 
+# ADD:
+class _ActionValuePlayAdapter:
+  """Wraps an action-value engine to expose a .play(board) -> chess.Move."""
+  def __init__(self, av_engine, return_bucket_values: np.ndarray):
+    self._eng = av_engine
+    self._rbv = np.asarray(return_bucket_values, dtype=np.float32)
 
-def _engine_from_policy(policy: str, predict_fn):
+  def play(self, board: chess.Board) -> chess.Move:
+    # Analyse returns per-legal log-probs over return buckets (shape [N, R]).
+    res = self._eng.analyse(board)
+    rb_log_probs = res['log_probs']
+    rb_probs = np.exp(rb_log_probs)              # [N, R]
+    # Expected win prob per legal: [N]
+    win_probs = rb_probs @ self._rbv
+    legal_moves = engines_core.get_ordered_legal_moves(board)
+    best_idx = int(np.argmax(win_probs))
+    return legal_moves[best_idx]
+
+def _engine_from_policy(policy: str, predict_fn, num_return_buckets: int):
   if policy == "behavioral_cloning_param":
     return neural_engines.ParamBCEngine(predict_fn=predict_fn)
+
   elif policy == "behavioral_cloning":
     return neural_engines.BCEngine(predict_fn=predict_fn)
-  else:
-    raise ValueError(f"Puzzles eval only supports BC policies; got: {policy}")
 
+  elif policy == "action_value_param":
+    # Build param-based action-value engine, then wrap into a .play(...) adapter.
+    _, rb_values = utils.get_uniform_buckets_edges_values(num_return_buckets)
+    av_engine = neural_engines.ActionValueParamEngine(
+        rb_values,
+        predict_fn,
+    )
+    return _ActionValuePlayAdapter(av_engine, rb_values)
+
+  elif policy == "action_value":
+    # Original action-id-based action-value engine -> wrap into .play(...) adapter.
+    _, rb_values = utils.get_uniform_buckets_edges_values(num_return_buckets)
+    av_engine = neural_engines.ActionValueEngine(
+        rb_values,
+        predict_fn,
+    )
+    return _ActionValuePlayAdapter(av_engine, rb_values)
+
+  else:
+    raise ValueError(f"Puzzles eval supports BC and action-value policies; got: {policy}")
 
 class PuzzlesEvaluator:
   """Runs puzzle accuracy for a local predictor+params."""
@@ -89,7 +127,11 @@ class PuzzlesEvaluator:
         params=params,
         batch_size=self._config.batch_size,
     )
-    self._engine = _engine_from_policy(self._config.policy, self._predict_fn)
+    self._engine = _engine_from_policy(
+    self._config.policy,
+    self._predict_fn,
+    self._config.num_return_buckets,
+    )
 
   def step(self) -> Mapping[str, float]:
     """Return dict of metrics for logging (accuracy, counts, avg rating)."""

@@ -48,31 +48,35 @@ def main(argv: Sequence[str]) -> None:
 
   max_sequence_length = tokenizer.SEQUENCE_LENGTH + 2
 
+  vocab_size=tokenizer.VOCAB_SIZE 
   match policy:
     case 'action_value' | 'state_value':
       output_size = num_return_buckets
+      vocab_size = utils.NUM_ACTION
     case 'action_value_param':
       output_size = num_return_buckets 
+      vocab_size=165
       max_sequence_length += 2 
     case 'behavioral_cloning':
       output_size = utils.NUM_ACTIONS
+      num_return_buckets = 0
     case 'behavioral_cloning_param':
       output_size = 64  # unified head vocab for (from/to/promo)
       max_sequence_length += 2
+      num_return_buckets = 0
 
   # === BEHAVIORAL CLONING (BC) — MAIN SETUP ===
   # Model: 16 layers, 8 heads, d_model=1024, learned pos encodings, no causal mask.
   # Data: 10M-game train set. Optimizer: Adam, lr=1e-4, batch=4096, 10M steps.
 
   predictor_config = transformer.TransformerConfig(
-      vocab_size=tokenizer.VOCAB_SIZE,           # keep as-is per your API
-      #vocab_size=utils.NUM_ACTIONS,
+      vocab_size=vocab_size,           # keep as-is per your API
       output_size=output_size,          
       pos_encodings=transformer.PositionalEncodings.LEARNED,
       max_sequence_length=max_sequence_length,     # BC context length
       num_heads=8,
       num_layers=8,
-      embedding_dim=256,                     # d_model
+      embedding_dim=320,                     # d_model
       apply_post_ln=True,                     # post-norm + SwiGLU in paper
       apply_qk_layernorm=False,
       use_causal_mask=False,                  # no causal mask
@@ -86,10 +90,10 @@ def main(argv: Sequence[str]) -> None:
   train_config = config_lib.TrainConfig(
       learning_rate=4e-4,
       data=config_lib.DataConfig(
-          batch_size=512,                    # paper main setup
+          batch_size=4096,                    # paper main setup
           shuffle=True,
           worker_count=8,
-          num_return_buckets=0,               # BC has no value bins
+          num_return_buckets=num_return_buckets,              
           policy=policy,
           split='train',
       ),
@@ -97,14 +101,14 @@ def main(argv: Sequence[str]) -> None:
       num_steps=500_000,                   # ~2.67 epochs on 10M games
       ckpt_frequency=25_000,                  # sensible cadence
       save_frequency=100_000,
-      puzzles_eval_every=5000,
+      puzzles_eval_every=10_000,
       puzzles_num=1024,
       puzzles_batch_size=256,
       puzzles_path=puzzles_path,
       eval=config_lib.EvalConfig(
         policy=policy,
-        data=config_lib.DataConfig(policy=None, num_return_buckets=0, split="test", batch_size=512, num_records=2048, worker_count=2),
-        num_return_buckets=0,
+        data=config_lib.DataConfig(policy=None, num_return_buckets=num_return_buckets, split="test", batch_size=512, num_records=2048, worker_count=2),
+        num_return_buckets=num_return_buckets,
         num_eval_data=2048,
         batch_size=256,
       ),
@@ -115,14 +119,14 @@ def main(argv: Sequence[str]) -> None:
           batch_size=512,                    # eval throughput
           shuffle=False,
           worker_count=8,
-          num_return_buckets=0,               # BC
+          num_return_buckets=num_return_buckets,               # BC
           policy=None,                        # pytype: disable=wrong-arg-types
           split='test',
       ),
       use_ema_params=True,
       policy=policy,
       batch_size=512,                        # eval micro-batch if your loop uses it
-      num_return_buckets=0,
+      num_return_buckets=num_return_buckets,
       num_eval_data=10_000,                   # ≈ size of their test set (states)
   )
 

@@ -154,26 +154,21 @@ class ConvertActionValueParamDataToSequence(ConvertToSequence):
     # state + 3 action params + 1 return bucket
     return tokenizer.SEQUENCE_LENGTH + 4
 
-  def map(
-      self, element: bytes
-  ) -> tuple[constants.Sequences, constants.LossMask]:
-    # Expected coder: constants.CODERS['action_value'] or a twin that returns (fen, uci_move, win_prob)
+  def map(self, element: bytes) -> tuple[constants.Sequences, constants.LossMask]:
     fen, move, win_prob = constants.CODERS['action_value'].decode(element)
 
-    # Tokenize board state
+    # 1) state
     state = _process_fen(fen)
 
-    # Convert move to (from_sq, to_sq, promo) — squares in [0..63], promo in [0..4] (0=no promo)
+    # 2) params as tokens (use unified offsets if you adopted them)
     from_sq, to_sq, promo = utils.move_to_params(move)
-    params = np.asarray([from_sq, to_sq, promo], dtype=np.int32)
+    param_tokens = utils.params_to_unified_tokens(from_sq, to_sq, promo)  # [3]
 
-    # Bucketize the target return
-    return_bucket = _process_win_prob(win_prob, self._return_buckets_edges)
+    # 3) last token is the **label** (bucket id 0..num_return_buckets-1)
+    return_bucket = _process_win_prob(win_prob, self._return_buckets_edges)  # [1]
 
-    # Full input sequence
-    sequence = np.concatenate([state, params, return_bucket])
+    sequence = np.concatenate([state, param_tokens, return_bucket])  # (s)+(p)+(r)
     return sequence, self._loss_mask
-
 
 
 _TRANSFORMATION_BY_POLICY = {
@@ -189,7 +184,10 @@ def build_data_loader(config: config_lib.DataConfig) -> pygrain.DataLoader:
   """Returns a data loader for chess from the config."""
 
   src_dir = Path(__file__).resolve().parent          # ...\searchless_chess\src
-  data_path = src_dir.parent / "data" / config.split / f"{config.policy}_data.bag"
+  if config.policy == 'action_value_param':
+    data_path = f"H:/ChessData/action_value_data.bag"
+  else:
+    data_path = src_dir.parent / "data" / config.split / f"{config.policy}_data.bag"
 
   data_source = bagz.BagDataSource(str(data_path))
 

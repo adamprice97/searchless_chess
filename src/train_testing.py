@@ -51,11 +51,14 @@ def main(argv: Sequence[str]) -> None:
   match policy:
     case 'action_value' | 'state_value':
       output_size = num_return_buckets
+    case 'action_value_param':
+      output_size = num_return_buckets 
+      max_sequence_length += 2 
     case 'behavioral_cloning':
       output_size = utils.NUM_ACTIONS
     case 'behavioral_cloning_param':
       output_size = 64  # unified head vocab for (from/to/promo)
-      max_sequence_length += 1
+      max_sequence_length += 2
 
   # === BEHAVIORAL CLONING (BC) — MAIN SETUP ===
   # Model: 16 layers, 8 heads, d_model=1024, learned pos encodings, no causal mask.
@@ -100,8 +103,8 @@ def main(argv: Sequence[str]) -> None:
       puzzles_path=puzzles_path,
       eval=config_lib.EvalConfig(
         policy=policy,
-        data=config_lib.DataConfig(policy=None, num_return_buckets=0, split="test", batch_size=2, num_records=8, worker_count=0),
-        num_return_buckets=0,
+        data=config_lib.DataConfig(policy=None, num_return_buckets=num_return_buckets, split="test", batch_size=2, num_records=8, worker_count=0),
+        num_return_buckets=num_return_buckets,
         num_eval_data=2048,
         batch_size=2,
       ),
@@ -112,14 +115,14 @@ def main(argv: Sequence[str]) -> None:
           batch_size=512,                    # eval throughput
           shuffle=False,
           worker_count=0,
-          num_return_buckets=0,               # BC
+          num_return_buckets=num_return_buckets,               # BC
           policy=None,                        # pytype: disable=wrong-arg-types
           split='test',
       ),
       use_ema_params=True,
       policy=policy,
       batch_size=512,                        # eval micro-batch if your loop uses it
-      num_return_buckets=0,
+      num_return_buckets=num_return_buckets,
       num_eval_data=10_000,                   # ≈ size of their test set (states)
   )
 

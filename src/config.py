@@ -19,8 +19,8 @@ import dataclasses
 from typing import Literal
 
 
-PolicyType = Literal['action_value', 'state_value', 'behavioral_cloning', 'behavioral_cloning_param']
-POLICY_TYPES = ['action_value', 'state_value', 'behavioral_cloning', 'behavioral_cloning_param']
+PolicyType = Literal['action_value', 'action_value_param', 'state_value', 'behavioral_cloning', 'behavioral_cloning_param']
+POLICY_TYPES = ['action_value', 'action_value_param', 'state_value', 'behavioral_cloning', 'behavioral_cloning_param']
 
 
 @dataclasses.dataclass(kw_only=True)

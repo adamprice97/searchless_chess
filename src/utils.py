@@ -25,6 +25,25 @@ import numpy as np
 # traditionally named rank and file.
 _CHESS_FILE = ['a', 'b', 'c', 'd', 'e', 'f', 'g', 'h']
 
+from searchless_chess.src import tokenizer
+
+# Base is the FEN alphabet
+BASE_VOCAB_SIZE = tokenizer.VOCAB_SIZE  # 31
+
+# Reserve ranges for parameter tokens
+FROM_OFFSET   = BASE_VOCAB_SIZE                # 31 .. 31+63
+TO_OFFSET     = FROM_OFFSET + 64               # 95 .. 95+63
+PROMO_OFFSET  = TO_OFFSET + 64                 # 159 .. 159+4
+DUMMY_R_TOKEN = PROMO_OFFSET + 5               # 164 (optional "dummy return" input token)
+
+# Final vocab size for action_value_param
+AV_PARAM_VOCAB_SIZE = DUMMY_R_TOKEN + 1        # 165
+
+def params_to_unified_tokens(from_sq: int, to_sq: int, promo: int) -> np.ndarray:
+  """Map (from,to,promo) into unified token IDs within [0, AV_PARAM_VOCAB_SIZE)."""
+  return np.asarray([FROM_OFFSET + from_sq,
+                     TO_OFFSET   + to_sq,
+                     PROMO_OFFSET + promo], dtype=np.int32)
 
 def _compute_all_possible_actions() -> tuple[dict[str, int], dict[int, str]]:
   """Returns two dicts converting moves to actions and actions to moves.

@@ -264,6 +264,23 @@ class ActionValueChessStaticMetricsEvaluator(ChessStaticMetricsEvaluator):
         entropy=entropy,
     )
 
+class ActionValueParamChessStaticMetricsEvaluator(ActionValueChessStaticMetricsEvaluator):
+  """Evaluator for parameterised action value (from,to,promo)."""
+
+  def _compute_metrics(self, fen: str) -> ChessStaticMetrics:
+    if not hasattr(self, '_predict_fn'):
+      raise ValueError('Predictor is not initialized.')
+
+    # Use the param-based engine which expects sequences:
+    # (state) + (from,to,promo) + (dummy return token)
+    neural_engine = neural_engines.ActionValueParamEngine(
+        self._return_buckets_values,
+        self._predict_fn,
+    )
+    analysis_results = neural_engine.analyse(chess.Board(fen))
+
+    # Reuse the same metric computation logic as action-value
+    return self._compute_metrics_from_analysis(analysis_results)
 
 class StateValueChessStaticMetricsEvaluator(
     ActionValueChessStaticMetricsEvaluator
@@ -429,6 +446,7 @@ def build_evaluator(
   """Returns an evaluator from an eval config."""
   evaluator_by_policy = {
       'action_value': ActionValueChessStaticMetricsEvaluator,
+      'action_value_param': ActionValueParamChessStaticMetricsEvaluator,
       'state_value': StateValueChessStaticMetricsEvaluator,
       'behavioral_cloning': BCChessStaticMetricsEvaluator,
       'behavioral_cloning_param': BCParamChessStaticMetricsEvaluator,
