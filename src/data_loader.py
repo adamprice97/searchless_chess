@@ -184,10 +184,10 @@ def build_data_loader(config: config_lib.DataConfig) -> pygrain.DataLoader:
   """Returns a data loader for chess from the config."""
 
   src_dir = Path(__file__).resolve().parent          # ...\searchless_chess\src
-  if config.policy == 'action_value_param':
-    data_path = f"H:/ChessData/action_value_data.bag"
-  else:
-    data_path = src_dir.parent / "data" / config.split / f"{config.policy}_data.bag"
+  #if config.policy == 'action_value_param':
+  #  data_path = f"H:/ChessData/action_value_data.bag"
+  #else:
+  data_path = src_dir.parent / "data" / config.split / f"{config.policy}_data.bag"
 
   data_source = bagz.BagDataSource(str(data_path))
 

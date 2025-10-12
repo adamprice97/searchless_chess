@@ -105,7 +105,7 @@ def main(argv: Sequence[str]) -> None:
         policy=policy,
         data=config_lib.DataConfig(policy=None, num_return_buckets=num_return_buckets, split="test", batch_size=2, num_records=8, worker_count=0),
         num_return_buckets=num_return_buckets,
-        num_eval_data=2048,
+        num_eval_data=8,
         batch_size=2,
       ),
   )
