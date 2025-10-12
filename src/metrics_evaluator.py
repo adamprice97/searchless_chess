@@ -97,6 +97,7 @@ class ChessStaticMetricsEvaluator(constants.Evaluator, abc.ABC):
       num_eval_data: If specified, the number of data points to use for
         evaluation. If unspecified, all data points are used.
     """
+    self._eval_limit = num_eval_data 
     self._predictor = predictor
     self._return_buckets_edges, self._return_buckets_values = (
         utils.get_uniform_buckets_edges_values(num_return_buckets)
@@ -157,45 +158,60 @@ class ChessStaticMetricsEvaluator(constants.Evaluator, abc.ABC):
 class ActionValueChessStaticMetricsEvaluator(ChessStaticMetricsEvaluator):
   """Evaluator for action value."""
 
-  def _retrieve_test_data(
-      self,
-  ) -> dict[str, Sequence[np.ndarray]]:
-    """Retrieves and returns the test data.
-
-    Returns:
-      - Boards represented as FEN strings.
-      - A mapping from FEN strings (above) to a sequence of
-      (legal action, stockfish score).
-    """
+  def _retrieve_test_data(self) -> dict[str, Sequence[np.ndarray]]:
+    """Stream the bag, collect only complete FENs, and early-stop at limit."""
     move_to_action = utils.MOVE_TO_ACTION
-    bag_reader = bagz.BagReader(self._dataset_path)
+    reader = bagz.BagReader(self._dataset_path)
 
-    action_score_dict = collections.defaultdict(dict)
-    for bytes_data in bag_reader:
+    # For each FEN we track: expected legal actions (tuple), and the observed scores.
+    expected_legals: dict[str, tuple[int, ...]] = {}
+    observed: dict[str, dict[int, float]] = {}
+
+    def compute_legal_actions(fen: str) -> tuple[int, ...]:
+      # Cache-friendly: set_fen on a reused board avoids repeated parsing allocs.
+      if fen in expected_legals:
+        return expected_legals[fen]
+      b = chess.Board(fen)
+      la = tuple(move_to_action[m.uci()] for m in engine.get_ordered_legal_moves(b))
+      expected_legals[fen] = la
+      return la
+
+    completed: dict[str, np.ndarray] = {}
+
+    # Stream records; insert into the right FEN bucket
+    for bytes_data in reader:
       fen, move, win_prob = constants.CODERS['action_value'].decode(bytes_data)
-      action = move_to_action[move]
-      action_score_dict[fen][action] = win_prob
+      act = move_to_action[move]
 
-    to_remove = []
-    for fen in action_score_dict:
-      list_items = list(action_score_dict[fen].items())
-      list_items.sort(key=lambda x: x[0])
-      action_score_dict[fen] = np.array(list_items, dtype=np.float32)
+      # Prepare structures
+      if fen not in observed:
+        observed[fen] = {}
+        # side effect: populates expected_legals cache
+        _ = compute_legal_actions(fen)
 
-      board = chess.Board(fen)
-      legal_actions = action_score_dict[fen][:, 0].tolist()
-      true_legal_moves = engine.get_ordered_legal_moves(board)
-      true_legal_actions = [move_to_action[x.uci()] for x in true_legal_moves]
-      # Check that the dataset contains the right legal actions.
-      if true_legal_actions != legal_actions:
-        to_remove.append(fen)
+      # Ignore actions that aren't legal (keeps us robust to any bag noise)
+      if act not in expected_legals[fen]:
+        continue
 
-    fraction_removed = len(to_remove) / len(action_score_dict)
-    for fen in to_remove:
-      del action_score_dict[fen]
-    logging.info('Removed %f of FENs, wrong legal actions.', fraction_removed)
+      observed[fen][act] = win_prob
 
-    return dict(action_score_dict)
+      # Check if this FEN is now complete
+      if len(observed[fen]) == len(expected_legals[fen]):
+        # Build a sorted [ (action, win_prob), ... ] -> np.array shape [N,2]
+        legals = expected_legals[fen]
+        arr = np.array([(a, observed[fen][a]) for a in legals], dtype=np.float32)
+        completed[fen] = arr
+        # Optional: free memory
+        del observed[fen]
+
+        # Early stop if we hit the requested eval limit
+        if self._eval_limit is not None and len(completed) >= self._eval_limit:
+          break
+
+    if not completed:
+      logging.warning("No complete FENs were found in %s", self._dataset_path)
+
+    return completed
 
   def _compute_metrics(self, fen: str) -> ChessStaticMetrics:
     if not hasattr(self, '_predict_fn'):

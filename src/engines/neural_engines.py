@@ -109,13 +109,25 @@ class ActionValueParamEngine(NeuralEngine):
     """Returns buckets log-probs for each legal move and the FEN."""
     sorted_legal_moves = engine.get_ordered_legal_moves(board)
     legals_uci = [x.uci() for x in sorted_legal_moves]
-    params = np.array([utils.move_to_params(u) for u in legals_uci], dtype=np.int32)  # [N,3]
-    dummy_return = np.zeros((len(params), 1), dtype=np.int32)
+    params_raw = [utils.move_to_params(u) for u in legals_uci]              # (0..63, 0..63, 0..4)
+    params = np.stack([utils.params_to_unified_tokens(*p) for p in params_raw], axis=0).astype(np.int32)  # [N,3]
+    dummy_return = np.full((len(params), 1), utils.DUMMY_R_TOKEN, dtype=np.int32)
     tokenized_fen = tokenizer.tokenize(board.fen()).astype(np.int32)
     states = np.repeat(tokenized_fen[None, :], len(params), axis=0) 
     sequences = np.concatenate([states, params, dummy_return], axis=1).astype(np.int32)
 
     return {'log_probs': self.predict_fn(sequences)[:, -1], 'fen': board.fen()}
+  
+  def play(self, board: chess.Board) -> chess.Move:
+    rb_log_probs = self.analyse(board)['log_probs']         # [N, R] (log)
+    rb_probs = np.exp(rb_log_probs)
+    win_probs = rb_probs @ self._return_buckets_values      # [N]
+    _update_scores_with_repetitions(board, win_probs)
+    moves = engine.get_ordered_legal_moves(board)
+    if self.temperature is not None:
+      p = scipy.special.softmax(win_probs / self.temperature, axis=-1)
+      return self._rng.choice(moves, p=p)
+    return moves[int(np.argmax(win_probs))]
 
 class StateValueEngine(NeuralEngine):
   """Neural engine using a function P(r | s)."""
