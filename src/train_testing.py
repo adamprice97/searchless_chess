@@ -56,9 +56,11 @@ def main(argv: Sequence[str]) -> None:
       max_sequence_length += 2 
     case 'behavioral_cloning':
       output_size = utils.NUM_ACTIONS
+      num_return_buckets = 0
     case 'behavioral_cloning_param':
       output_size = 64  # unified head vocab for (from/to/promo)
       max_sequence_length += 2
+      num_return_buckets = 0
 
   # === BEHAVIORAL CLONING (BC) — MAIN SETUP ===
   # Model: 16 layers, 8 heads, d_model=1024, learned pos encodings, no causal mask.
@@ -88,8 +90,8 @@ def main(argv: Sequence[str]) -> None:
       data=config_lib.DataConfig(
           batch_size=8,                    # paper main setup
           shuffle=True,
-          worker_count=0,
-          num_return_buckets=0,               # BC has no value bins
+          worker_count=2,
+          num_return_buckets=num_return_buckets,       
           policy=policy,
           split='train',
       ),
@@ -97,13 +99,13 @@ def main(argv: Sequence[str]) -> None:
       num_steps=500_000,                   # ~2.67 epochs on 10M games
       ckpt_frequency=25_000,                  # sensible cadence
       save_frequency=100_000,
-      puzzles_eval_every=5000,
+      puzzles_eval_every=500,
       puzzles_num=8,
       puzzles_batch_size=2,
       puzzles_path=puzzles_path,
       eval=config_lib.EvalConfig(
         policy=policy,
-        data=config_lib.DataConfig(policy=None, num_return_buckets=num_return_buckets, split="test", batch_size=2, num_records=8, worker_count=0),
+        data=config_lib.DataConfig(policy=None, num_return_buckets=num_return_buckets, split="test", batch_size=2, num_records=8, worker_count=2),
         num_return_buckets=num_return_buckets,
         num_eval_data=8,
         batch_size=2,
