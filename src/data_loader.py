@@ -30,6 +30,7 @@ from searchless_chess.src import tokenizer
 from searchless_chess.src import utils
 
 
+
 def _process_fen(fen: str) -> np.ndarray:
   return tokenizer.tokenize(fen).astype(np.int32)
 
@@ -214,6 +215,8 @@ def build_data_loader(config: config_lib.DataConfig) -> pygrain.DataLoader:
       ),
       pygrain.Batch(config.batch_size, drop_remainder=True),
   )
+
+  print('WC:', config.worker_count)
   return pygrain.DataLoader(
       data_source=data_source,
       sampler=sampler,

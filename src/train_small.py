@@ -88,27 +88,27 @@ def main(argv: Sequence[str]) -> None:
   train_config = config_lib.TrainConfig(
       learning_rate=4e-4,
       data=config_lib.DataConfig(
-          batch_size=8,                    # paper main setup
+          batch_size=512,                    # paper main setup
           shuffle=True,
-          worker_count=0,
+          worker_count=8,
           num_return_buckets=num_return_buckets,       
           policy=policy,
           split='train',
       ),
-      log_frequency=1,                      # practical default; adjust if noisy
+      log_frequency=100,                      # practical default; adjust if noisy
       num_steps=500_000,                   # ~2.67 epochs on 10M games
       ckpt_frequency=25_000,                  # sensible cadence
       save_frequency=100_000,
-      puzzles_eval_every=500,
-      puzzles_num=8,
-      puzzles_batch_size=2,
+      puzzles_eval_every=5_000,
+      puzzles_num=512,
+      puzzles_batch_size=128,
       puzzles_path=puzzles_path,
       eval=config_lib.EvalConfig(
         policy=policy,
-        data=config_lib.DataConfig(policy=None, num_return_buckets=num_return_buckets, split="test", batch_size=2, num_records=8, worker_count=0),
+        data=config_lib.DataConfig(policy=None, num_return_buckets=num_return_buckets, split="test", batch_size=64, num_records=8, worker_count=2),
         num_return_buckets=num_return_buckets,
-        num_eval_data=8,
-        batch_size=2,
+        num_eval_data=512,
+        batch_size=128,
       ),
   )
 

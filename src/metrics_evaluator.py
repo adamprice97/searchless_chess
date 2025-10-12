@@ -454,7 +454,7 @@ def build_evaluator(
 
   # Build data path relative to this file (works no matter where you run from)
   src_dir = Path(__file__).resolve().parent        # .../searchless_chess/src
-  data_path = src_dir.parent / "data" / config.data.split / "action_value_data.bag"
+  data_path = src_dir.parent / "data" / config.data.split / "action_value_param_data.bag"
 
   # Helpful error if missing
   if not data_path.exists():
